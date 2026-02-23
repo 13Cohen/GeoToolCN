@@ -16,7 +16,8 @@ Covers all provinces, cities, and districts with no API keys or network access r
 - **Batch processing** — reverse-geocode thousands of coordinates in one call
 - **R-tree spatial index** — fast point-in-polygon lookup
 - **Typed dataclasses** — structured `Region` and `ReverseResult` objects
-- **Zero network** — fully offline, bundled GeoJSON data
+- **Admin division tree** — province → city → district tree for UI cascaders, no geopandas needed
+- **Zero network** — fully offline, bundled data
 
 ## Installation
 
@@ -50,6 +51,19 @@ provinces = geo.list_regions("province")
 # Lookup by GB code
 region = geo.get_region("156110000")
 ```
+
+### Administrative Division Tree
+
+Three-level province → city → district tree for UI cascaders / dropdowns. **No geopandas required.**
+
+```python
+from geotool_cn import get_administrative_tree
+
+tree = get_administrative_tree()
+# tree[0] = {"value": "110000", "label": "北京市", "children": [...]}
+```
+
+Municipalities (Beijing, Tianjin, Shanghai, Chongqing) and SARs (Hong Kong, Macau) use the province code as the city-level `value`. Results are sorted by `value` at every level and cached after the first call.
 
 ### Convenience Functions
 
@@ -95,6 +109,10 @@ List all regions at a given level (`"province"`, `"city"`, or `"district"`).
 
 Look up a single region by its GB admin code.
 
+### `get_administrative_tree() → list[dict]`
+
+Return a three-level province → city → district tree. Each node: `{"value": "adcode", "label": "name", "children": [...]}`. Covers 34 provincial units (including Taiwan, Hong Kong, Macau), 3200+ districts. Does not require geopandas; cached after the first call.
+
 ### Data Classes
 
 ```python
@@ -122,17 +140,35 @@ class ReverseResult:
 | Batch 1000 pts | ~2000s | ~1s (spatial join) |
 | Forward search | ~0.5s (scan) | <0.1ms (dict index) |
 
-## Custom Data
+## Updating Data
 
-Download the latest data from [天地图](https://cloudcenter.tianditu.gov.cn/administrativeDivision/), rename to `china_province.geojson`, `china_city.geojson`, `china_district.geojson`, and pass the directory:
+### Geocoding data (Tianditu GeoJSON)
+
+Download the latest data from [Tianditu](https://cloudcenter.tianditu.gov.cn/administrativeDivision/), rename to `china_province.geojson`, `china_city.geojson`, `china_district.geojson`, and pass the directory:
 
 ```python
 geo = GeoTool(data_dir="/path/to/data")
 ```
 
-## Data Source
+### Admin tree data (Tencent LBS Excel)
 
-[天地图](https://cloudcenter.tianditu.gov.cn/administrativeDivision/) (updated September 2025)
+1. Download the latest admin division Excel from [Tencent LBS](https://lbs.qq.com/service/webService/webServiceGuide/search/webServiceDistrict#9)
+2. Place the `.xlsx` file in the `scripts/` directory
+3. Run the generation script:
+
+```bash
+pip install openpyxl  # only needed for the script, not the library itself
+python scripts/generate_admin_data.py
+```
+
+The script reads the `.xlsx` file from `scripts/` and generates `GeoToolCN/data/china_admin.json`.
+
+## Data Sources
+
+| Source | Purpose | Updated |
+|--------|---------|---------|
+| [Tianditu](https://cloudcenter.tianditu.gov.cn/administrativeDivision/) | Geocoding (GeoJSON boundaries) | September 2025 |
+| [Tencent LBS](https://lbs.qq.com/service/webService/webServiceGuide/search/webServiceDistrict#9) | Admin division tree (adcodes) | March 2025 |
 
 ## License
 

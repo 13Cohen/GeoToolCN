@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "geotool-cn"
-version = "1.0.1"
+version = "1.1.0"
 description = "Offline geocoding and reverse geocoding for Chinese administrative regions"
 readme = "README.md"
 license = "MIT"
@@ -30,7 +30,7 @@ Issues = "https://github.com/13Cohen/GeoToolCN/issues"
 include = ["GeoToolCN*"]
 
 [tool.setuptools.package-data]
-GeoToolCN = ["data/*.geojson"]
+GeoToolCN = ["data/*.geojson", "data/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
