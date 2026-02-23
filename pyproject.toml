@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "geotool-cn"
+version = "1.0.1"
+description = "Offline geocoding and reverse geocoding for Chinese administrative regions"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.9"
+authors = [
+    { name = "Cohen" },
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: GIS",
+]
+dependencies = [
+    "geopandas>=0.14",
+    "shapely>=2",
+]
+
+[project.urls]
+Homepage = "https://github.com/13Cohen/GeoToolCN"
+Issues = "https://github.com/13Cohen/GeoToolCN/issues"
+
+[tool.setuptools.packages.find]
+include = ["GeoToolCN*"]
+
+[tool.setuptools.package-data]
+GeoToolCN = ["data/*.geojson"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
