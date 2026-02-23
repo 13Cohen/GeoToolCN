@@ -16,6 +16,10 @@ _FILES = {
 }
 _DEFAULT_DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 
+# Municipalities (直辖市) and SARs (特别行政区) whose city-level GB code
+# in the GeoJSON data equals the province-level GB code.
+_MERGED_PREFIXES = frozenset({"11", "12", "31", "50", "81", "82"})
+
 
 @dataclass
 class Region:
@@ -290,6 +294,141 @@ class GeoTool:
             if pos is not None:
                 return self._row_to_region(ld.gdf.iloc[pos], lvl)
         return None
+
+    # ------------------------------------------------------------------
+    # Adcode lookup
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _adcode_to_gb(adcode: str) -> str:
+        """Convert a 6-digit adcode to a 9-digit GB code."""
+        return "156" + adcode
+
+    @staticmethod
+    def _adcode_level(adcode: str) -> str | None:
+        """Detect admin level from a 6-digit adcode, or *None* if invalid."""
+        if len(adcode) != 6 or not adcode.isdigit():
+            return None
+        if adcode.endswith("0000"):
+            return "province"
+        if adcode.endswith("00"):
+            return "city"
+        return "district"
+
+    def _lookup_gb(self, level: str, gb_code: str) -> Region | None:
+        """Look up a Region by its 9-digit GB code at a specific level."""
+        ld = self._levels[level]
+        pos = ld.code_index.get(gb_code)
+        if pos is None:
+            return None
+        return self._row_to_region(ld.gdf.iloc[pos], level)
+
+    def lookup_adcode(self, adcode: str) -> ReverseResult | None:
+        """Look up the administrative hierarchy for a 6-digit adcode.
+
+        Parameters
+        ----------
+        adcode : str
+            6-digit administrative division code (e.g. ``"110108"`` for
+            海淀区, ``"440300"`` for 深圳市).
+
+        Returns
+        -------
+        ReverseResult or None
+            The full province/city/district chain, or *None* when the
+            adcode is invalid or nothing can be found.
+        """
+        level = self._adcode_level(adcode)
+        if level is None:
+            return None
+
+        prefix2 = adcode[:2]
+        is_merged = prefix2 in _MERGED_PREFIXES
+
+        # Province
+        prov_gb = self._adcode_to_gb(prefix2 + "0000")
+        province = self._lookup_gb("province", prov_gb)
+
+        if level == "province":
+            return ReverseResult(province=province) if province else None
+
+        # City
+        if is_merged:
+            city = self._lookup_gb("city", prov_gb)
+        else:
+            city = self._lookup_gb("city", self._adcode_to_gb(adcode[:4] + "00"))
+
+        if level == "city":
+            if province is None and city is None:
+                return None
+            return ReverseResult(province=province, city=city)
+
+        # District
+        district = self._lookup_gb("district", self._adcode_to_gb(adcode))
+
+        if province is None and city is None and district is None:
+            return None
+        return ReverseResult(province=province, city=city, district=district)
+
+    # ------------------------------------------------------------------
+    # Containment checks
+    # ------------------------------------------------------------------
+
+    def is_in_china(self, lat: float, lng: float) -> bool:
+        """Check whether a coordinate falls within China's territory.
+
+        Parameters
+        ----------
+        lat : float
+            Latitude (WGS-84).
+        lng : float
+            Longitude (WGS-84).
+
+        Returns
+        -------
+        bool
+        """
+        return self._point_in_level("province", Point(lng, lat)) is not None
+
+    def is_in_region(self, lat: float, lng: float, adcode: str) -> bool:
+        """Check whether a coordinate falls within a specific admin region.
+
+        Parameters
+        ----------
+        lat : float
+            Latitude (WGS-84).
+        lng : float
+            Longitude (WGS-84).
+        adcode : str
+            6-digit administrative division code (e.g. ``"110108"``).
+
+        Returns
+        -------
+        bool
+
+        Raises
+        ------
+        ValueError
+            If *adcode* is malformed or does not match any known region.
+        """
+        level = self._adcode_level(adcode)
+        if level is None:
+            raise ValueError(f"Invalid adcode: {adcode!r}")
+
+        prefix2 = adcode[:2]
+        if level == "city" and prefix2 in _MERGED_PREFIXES:
+            gb_code = self._adcode_to_gb(prefix2 + "0000")
+        else:
+            gb_code = self._adcode_to_gb(adcode)
+
+        ld = self._levels[level]
+        pos = ld.code_index.get(gb_code)
+        if pos is None:
+            raise ValueError(
+                f"Region not found for adcode {adcode!r} (GB code {gb_code!r})"
+            )
+
+        return ld.gdf.iloc[pos].geometry.contains(Point(lng, lat))
 
     # ------------------------------------------------------------------
     # Helpers

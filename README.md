@@ -15,7 +15,8 @@
 - **批量处理** — 一次调用即可逆编码数千个坐标点
 - **R-tree 空间索引** — 快速点在多边形查询
 - **类型化数据类** — 结构化的 `Region` 和 `ReverseResult` 对象
-- **零网络依赖** — 完全离线，内置 GeoJSON 数据
+- **行政区划树** — 省→市→区县三级树，适用于前端级联选择器，无需 geopandas
+- **零网络依赖** — 完全离线，内置数据
 
 ## 安装
 
@@ -49,6 +50,19 @@ provinces = geo.list_regions("province")
 # 按国标代码查询
 region = geo.get_region("156110000")
 ```
+
+### 行政区划树
+
+省→市→区县三级树，适用于前端级联选择器（Cascader）等场景。**无需 geopandas**。
+
+```python
+from geotool_cn import get_administrative_tree
+
+tree = get_administrative_tree()
+# tree[0] = {"value": "110000", "label": "北京市", "children": [...]}
+```
+
+直辖市（北京、天津、上海、重庆）和特别行政区（香港、澳门）的市级节点 `value` 使用省级代码。结果按 `value` 升序排列，首次调用后缓存。
 
 ### 便捷函数
 
@@ -94,6 +108,10 @@ geo.search("朝阳区", city="长春市")        # 仅返回长春的
 
 按国标行政区划代码查询单个区划。
 
+### `get_administrative_tree() → list[dict]`
+
+返回省→市→区县三级行政区划树。每个节点格式：`{"value": "adcode", "label": "名称", "children": [...]}`。覆盖 34 个省级单位（含台湾、香港、澳门），3200+ 区县。该函数不依赖 geopandas，首次调用后缓存。
+
 ### 数据类
 
 ```python
@@ -121,7 +139,9 @@ class ReverseResult:
 | 批量 1000 点 | ~2000s | ~1s（空间连接） |
 | 正向搜索 | ~0.5s（扫描） | <0.1ms（字典索引） |
 
-## 自定义数据
+## 更新数据
+
+### 地理编码数据（天地图 GeoJSON）
 
 从[天地图](https://cloudcenter.tianditu.gov.cn/administrativeDivision/)下载最新数据，分别命名为 `china_province.geojson`、`china_city.geojson`、`china_district.geojson`，然后传入目录路径：
 
@@ -129,9 +149,25 @@ class ReverseResult:
 geo = GeoTool(data_dir="/path/to/data")
 ```
 
+### 行政区划树数据（腾讯 LBS Excel）
+
+1. 从[腾讯位置服务](https://lbs.qq.com/service/webService/webServiceGuide/search/webServiceDistrict#9)下载最新的行政区划编码表 Excel
+2. 将 `.xlsx` 文件放入 `scripts/` 目录
+3. 运行生成脚本：
+
+```bash
+pip install openpyxl  # 仅生成脚本需要，库本身不依赖
+python scripts/generate_admin_data.py
+```
+
+脚本会自动读取 `scripts/` 下的 `.xlsx` 文件，生成 `GeoToolCN/data/china_admin.json`。
+
 ## 数据来源
 
-[天地图](https://cloudcenter.tianditu.gov.cn/administrativeDivision/)（2025 年 9 月更新）
+| 数据源 | 用途 | 更新时间 |
+|--------|------|----------|
+| [天地图](https://cloudcenter.tianditu.gov.cn/administrativeDivision/) | 地理编码（GeoJSON 边界） | 2025 年 9 月 |
+| [腾讯位置服务](https://lbs.qq.com/service/webService/webServiceGuide/search/webServiceDistrict#9) | 行政区划树（adcode 编码） | 2025 年 3 月 |
 
 ## 许可证
 
