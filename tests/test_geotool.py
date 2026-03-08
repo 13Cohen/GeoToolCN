@@ -232,15 +232,18 @@ class TestLookupAdcode:
         r = geo.lookup_adcode("110108")
         assert r is not None
         assert r.province is not None and "北京" in r.province.name
-        assert r.city is None
+        assert r.city is not None and "北京" in r.city.name
+        assert r.city.level == "city"
         assert r.district is not None and "海淀" in r.district.name
 
     def test_municipality_city_level(self, geo: GeoTool) -> None:
-        """Beijing city: adcode 110100 -> no city-level data for municipalities."""
+        """Beijing city: adcode 110100 -> city mirrors province for municipalities."""
         r = geo.lookup_adcode("110100")
         assert r is not None
         assert r.province is not None
-        assert r.city is None
+        assert r.city is not None
+        assert r.city.level == "city"
+        assert r.city.name == r.province.name
 
     def test_sar(self, geo: GeoTool) -> None:
         """Hong Kong province level."""
