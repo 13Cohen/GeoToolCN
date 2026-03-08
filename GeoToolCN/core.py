@@ -16,8 +16,8 @@ _FILES = {
 }
 _DEFAULT_DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 
-# Municipalities (直辖市) and SARs (特别行政区) whose city-level GB code
-# in the GeoJSON data equals the province-level GB code.
+# Municipalities (直辖市) and SARs (特别行政区) that have no city-level
+# subdivision — districts sit directly under the province.
 _MERGED_PREFIXES = frozenset({"11", "12", "31", "50", "81", "82"})
 
 
@@ -47,11 +47,13 @@ class _LevelData:
 
     gdf: gpd.GeoDataFrame
     name_index: dict[str, list[int]]  # name -> row positions
-    code_index: dict[str, int]  # gb code -> row position
+    code_index: dict[str, int]  # adcode -> row position
 
     @staticmethod
     def load(path: str) -> "_LevelData":
         gdf = gpd.read_file(path)
+        # Fix any invalid geometries from the data source
+        gdf["geometry"] = gdf["geometry"].make_valid()
         # Ensure spatial index is built
         _ = gdf.sindex
 
@@ -59,7 +61,7 @@ class _LevelData:
         code_idx: dict[str, int] = {}
         for i, row in enumerate(gdf.itertuples()):
             name_idx.setdefault(row.name, []).append(i)
-            code_idx[row.gb] = i
+            code_idx[str(row.adcode)] = i
         return _LevelData(gdf=gdf, name_index=name_idx, code_index=code_idx)
 
 
@@ -99,7 +101,7 @@ class GeoTool:
                 centroid = row.geometry.representative_point()
                 return Region(
                     name=row["name"],
-                    code=row["gb"],
+                    code=str(row["adcode"]),
                     level=level,
                     latitude=round(centroid.y, 6),
                     longitude=round(centroid.x, 6),
@@ -175,7 +177,7 @@ class GeoTool:
                     rep = matched_geom.representative_point()
                     kw[level] = Region(
                         name=row["name"],
-                        code=row["gb"],
+                        code=str(row["adcode"]),
                         level=level,
                         latitude=round(rep.y, 6),
                         longitude=round(rep.x, 6),
@@ -196,18 +198,18 @@ class GeoTool:
         city: str | None = None,
         fuzzy: bool = True,
     ) -> list[Region]:
-        """Search for regions by name or GB admin code.
+        """Search for regions by name or adcode.
 
         Parameters
         ----------
         query : str
-            Region name (e.g. ``"深圳市"``) or GB code (e.g. ``"156440300"``).
+            Region name (e.g. ``"深圳市"``) or adcode (e.g. ``"440300"``).
         level : str, optional
             Restrict to ``"province"``, ``"city"``, or ``"district"``.
         province : str, optional
-            Filter results to those within this province (name or GB code).
+            Filter results to those within this province (name or adcode).
         city : str, optional
-            Filter results to those within this city (name or GB code).
+            Filter results to those within this city (name or adcode).
         fuzzy : bool
             If *True* (default), also match regions whose name *contains*
             the query when no exact match is found.
@@ -277,12 +279,12 @@ class GeoTool:
         ]
 
     def get_region(self, code: str) -> Region | None:
-        """Get a single region by its GB admin code.
+        """Get a single region by its adcode.
 
         Parameters
         ----------
         code : str
-            e.g. ``"156110000"`` for Beijing.
+            e.g. ``"110000"`` for Beijing.
 
         Returns
         -------
@@ -300,11 +302,6 @@ class GeoTool:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _adcode_to_gb(adcode: str) -> str:
-        """Convert a 6-digit adcode to a 9-digit GB code."""
-        return "156" + adcode
-
-    @staticmethod
     def _adcode_level(adcode: str) -> str | None:
         """Detect admin level from a 6-digit adcode, or *None* if invalid."""
         if len(adcode) != 6 or not adcode.isdigit():
@@ -315,10 +312,10 @@ class GeoTool:
             return "city"
         return "district"
 
-    def _lookup_gb(self, level: str, gb_code: str) -> Region | None:
-        """Look up a Region by its 9-digit GB code at a specific level."""
+    def _lookup_adcode(self, level: str, code: str) -> Region | None:
+        """Look up a Region by its adcode at a specific level."""
         ld = self._levels[level]
-        pos = ld.code_index.get(gb_code)
+        pos = ld.code_index.get(code)
         if pos is None:
             return None
         return self._row_to_region(ld.gdf.iloc[pos], level)
@@ -346,17 +343,18 @@ class GeoTool:
         is_merged = prefix2 in _MERGED_PREFIXES
 
         # Province
-        prov_gb = self._adcode_to_gb(prefix2 + "0000")
-        province = self._lookup_gb("province", prov_gb)
+        prov_code = prefix2 + "0000"
+        province = self._lookup_adcode("province", prov_code)
 
         if level == "province":
             return ReverseResult(province=province) if province else None
 
         # City
         if is_merged:
-            city = self._lookup_gb("city", prov_gb)
+            # Municipalities/SARs have no city-level GeoJSON
+            city = None
         else:
-            city = self._lookup_gb("city", self._adcode_to_gb(adcode[:4] + "00"))
+            city = self._lookup_adcode("city", adcode[:4] + "00")
 
         if level == "city":
             if province is None and city is None:
@@ -364,7 +362,7 @@ class GeoTool:
             return ReverseResult(province=province, city=city)
 
         # District
-        district = self._lookup_gb("district", self._adcode_to_gb(adcode))
+        district = self._lookup_adcode("district", adcode)
 
         if province is None and city is None and district is None:
             return None
@@ -417,15 +415,17 @@ class GeoTool:
 
         prefix2 = adcode[:2]
         if level == "city" and prefix2 in _MERGED_PREFIXES:
-            gb_code = self._adcode_to_gb(prefix2 + "0000")
+            lookup_code = prefix2 + "0000"
+            lookup_level = "province"
         else:
-            gb_code = self._adcode_to_gb(adcode)
+            lookup_code = adcode
+            lookup_level = level
 
-        ld = self._levels[level]
-        pos = ld.code_index.get(gb_code)
+        ld = self._levels[lookup_level]
+        pos = ld.code_index.get(lookup_code)
         if pos is None:
             raise ValueError(
-                f"Region not found for adcode {adcode!r} (GB code {gb_code!r})"
+                f"Region not found for adcode {adcode!r}"
             )
 
         return ld.gdf.iloc[pos].geometry.contains(Point(lng, lat))
@@ -464,7 +464,7 @@ class GeoTool:
         pt = row.geometry.representative_point()
         return Region(
             name=row["name"],
-            code=row["gb"],
+            code=str(row["adcode"]),
             level=level,
             latitude=round(pt.y, 6),
             longitude=round(pt.x, 6),

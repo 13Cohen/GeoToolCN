@@ -1,0 +1,14 @@
+{
+  "source": "DataV.GeoAtlas (阿里云 DataV 地理小工具)",
+  "source_url": "https://datav.aliyun.com/tools/atlas",
+  "api_base": "https://geo.datav.aliyun.com/areas_v3/bound",
+  "fetched_at": "2026-03-07",
+  "original_crs": "GCJ-02",
+  "converted_crs": "WGS-84",
+  "counts": {
+    "provinces": 34,
+    "cities": 363,
+    "districts": 2874
+  },
+  "notes": "Taiwan (710000) has province-level boundary only, no sub-level data."
+}

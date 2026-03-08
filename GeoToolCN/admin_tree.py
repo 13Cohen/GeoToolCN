@@ -4,8 +4,8 @@ Builds a three-level (province → city → district) tree from the bundled
 ``china_admin.json`` data.  This module uses **only the standard library**
 and does not import geopandas, pandas, or shapely.
 
-Data source: 腾讯位置服务 行政区划编码表
-https://lbs.qq.com/service/webService/webServiceGuide/search/webServiceDistrict
+Data source: DataV.GeoAtlas (阿里云 DataV 地理小工具)
+https://datav.aliyun.com/tools/atlas
 """
 from __future__ import annotations
 

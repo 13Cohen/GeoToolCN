@@ -12,7 +12,7 @@ Covers all provinces, cities, and districts with no API keys or network access r
 ## Features
 
 - **Reverse geocoding** — coordinate → province / city / district
-- **Forward geocoding** — name or GB admin code → coordinates
+- **Forward geocoding** — name or adcode → coordinates
 - **Batch processing** — reverse-geocode thousands of coordinates in one call
 - **R-tree spatial index** — fast point-in-polygon lookup
 - **Typed dataclasses** — structured `Region` and `ReverseResult` objects
@@ -36,7 +36,7 @@ geo = GeoTool()
 result = geo.reverse(39.9, 116.4)
 print(result.province.name)   # 北京市
 print(result.district.name)   # 东城区
-print(result.district.code)   # 156110101
+print(result.district.code)   # 110101
 
 # Forward geocoding (name/code → coordinates)
 regions = geo.search("深圳市")
@@ -48,8 +48,8 @@ results = geo.reverse_batch([(39.9, 116.4), (31.2, 121.5)])
 # List all provinces
 provinces = geo.list_regions("province")
 
-# Lookup by GB code
-region = geo.get_region("156110000")
+# Lookup by adcode
+region = geo.get_region("110000")
 ```
 
 ### Administrative Division Tree
@@ -92,7 +92,7 @@ Reverse-geocode many `(lat, lng)` pairs at once using spatial join.
 
 ### `geo.search(query, *, level=None, province=None, city=None, fuzzy=True) → list[Region]`
 
-Search by region name or GB admin code. Set `level` to `"province"`, `"city"`, or `"district"` to narrow results. Use `province` or `city` to disambiguate regions with the same name (accepts name or GB code). Fuzzy matching is enabled by default.
+Search by region name or adcode. Set `level` to `"province"`, `"city"`, or `"district"` to narrow results. Use `province` or `city` to disambiguate regions with the same name (accepts name or adcode). Fuzzy matching is enabled by default.
 
 ```python
 # "朝阳区" exists in both Beijing and Changchun
@@ -107,11 +107,11 @@ List all regions at a given level (`"province"`, `"city"`, or `"district"`).
 
 ### `geo.get_region(code) → Region | None`
 
-Look up a single region by its GB admin code.
+Look up a single region by its adcode.
 
 ### `get_administrative_tree() → list[dict]`
 
-Return a three-level province → city → district tree. Each node: `{"value": "adcode", "label": "name", "children": [...]}`. Covers 34 provincial units (including Taiwan, Hong Kong, Macau), 3200+ districts. Does not require geopandas; cached after the first call.
+Return a three-level province → city → district tree. Each node: `{"value": "adcode", "label": "name", "children": [...]}`. Covers 34 provincial units (including Taiwan, Hong Kong, Macau), 2800+ districts. Does not require geopandas; cached after the first call.
 
 ### Data Classes
 
@@ -119,7 +119,7 @@ Return a three-level province → city → district tree. Each node: `{"value": 
 @dataclass
 class Region:
     name: str        # "北京市"
-    code: str        # "156110000"
+    code: str        # "110000" (6-digit adcode)
     level: str       # "province" | "city" | "district"
     latitude: float  # representative point latitude
     longitude: float # representative point longitude
@@ -142,33 +142,41 @@ class ReverseResult:
 
 ## Updating Data
 
-### Geocoding data (Tianditu GeoJSON)
+GeoJSON boundaries and admin tree use a **single data source** (DataV.GeoAtlas), updated via one script:
 
-Download the latest data from [Tianditu](https://cloudcenter.tianditu.gov.cn/administrativeDivision/), rename to `china_province.geojson`, `china_city.geojson`, `china_district.geojson`, and pass the directory:
+```bash
+python scripts/fetch_datav_geojson.py
+```
+
+The script will:
+1. Recursively download province/city/district boundaries from the DataV API
+2. Convert coordinates from GCJ-02 to WGS-84
+3. Generate `china_province.geojson`, `china_city.geojson`, `china_district.geojson`, and `china_admin.json`
+4. Update `DATA_VERSION.json` (records source, date, and counts)
+5. Generate `DATA_UPDATE_REPORT.md` (diff report comparing with previous data)
+6. Run automatic data validation (counts, adcodes, hierarchy, geometry, landmark spot checks)
+
+You can also run validation independently:
+
+```bash
+python scripts/validate_data.py
+```
+
+You can also use custom data:
 
 ```python
 geo = GeoTool(data_dir="/path/to/data")
 ```
 
-### Admin tree data (Tencent LBS Excel)
+## Data Source
 
-1. Download the latest admin division Excel from [Tencent LBS](https://lbs.qq.com/service/webService/webServiceGuide/search/webServiceDistrict#9)
-2. Place the `.xlsx` file in the `scripts/` directory
-3. Run the generation script:
-
-```bash
-pip install openpyxl  # only needed for the script, not the library itself
-python scripts/generate_admin_data.py
-```
-
-The script reads the `.xlsx` file from `scripts/` and generates `GeoToolCN/data/china_admin.json`.
-
-## Data Sources
-
-| Source | Purpose | Updated |
-|--------|---------|---------|
-| [Tianditu](https://cloudcenter.tianditu.gov.cn/administrativeDivision/) | Geocoding (GeoJSON boundaries) | September 2025 |
-| [Tencent LBS](https://lbs.qq.com/service/webService/webServiceGuide/search/webServiceDistrict#9) | Admin division tree (adcodes) | March 2025 |
+| Field | Value |
+|-------|-------|
+| Source | [DataV.GeoAtlas](https://datav.aliyun.com/tools/atlas) (Alibaba Cloud DataV) |
+| Coverage | 34 provinces / 363 cities / 2874 districts |
+| CRS | WGS-84 (converted from GCJ-02) |
+| Code system | 6-digit adcode |
+| Last updated | March 2026 |
 
 ## License
 

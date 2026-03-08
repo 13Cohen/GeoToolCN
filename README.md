@@ -11,7 +11,7 @@
 ## 功能特点
 
 - **逆地理编码** — 经纬度坐标 → 省 / 市 / 区县
-- **正向地理编码** — 地名或国标行政区划代码 → 经纬度坐标
+- **正向地理编码** — 地名或行政区划代码 → 经纬度坐标
 - **批量处理** — 一次调用即可逆编码数千个坐标点
 - **R-tree 空间索引** — 快速点在多边形查询
 - **类型化数据类** — 结构化的 `Region` 和 `ReverseResult` 对象
@@ -35,7 +35,7 @@ geo = GeoTool()
 result = geo.reverse(39.9, 116.4)
 print(result.province.name)   # 北京市
 print(result.district.name)   # 东城区
-print(result.district.code)   # 156110101
+print(result.district.code)   # 110101
 
 # 正向地理编码（地名/代码 → 坐标）
 regions = geo.search("深圳市")
@@ -47,8 +47,8 @@ results = geo.reverse_batch([(39.9, 116.4), (31.2, 121.5)])
 # 列出所有省份
 provinces = geo.list_regions("province")
 
-# 按国标代码查询
-region = geo.get_region("156110000")
+# 按 adcode 查询
+region = geo.get_region("110000")
 ```
 
 ### 行政区划树
@@ -91,7 +91,7 @@ regions = search("深圳市")
 
 ### `geo.search(query, *, level=None, province=None, city=None, fuzzy=True) → list[Region]`
 
-按地名或国标行政区划代码搜索。设置 `level` 为 `"province"`、`"city"` 或 `"district"` 可缩小搜索范围。使用 `province` 或 `city` 参数可消除同名区划的歧义（接受地名或国标代码）。默认开启模糊匹配。
+按地名或 adcode 搜索。设置 `level` 为 `"province"`、`"city"` 或 `"district"` 可缩小搜索范围。使用 `province` 或 `city` 参数可消除同名区划的歧义（接受地名或 adcode）。默认开启模糊匹配。
 
 ```python
 # "朝阳区"在北京和长春都存在
@@ -106,11 +106,11 @@ geo.search("朝阳区", city="长春市")        # 仅返回长春的
 
 ### `geo.get_region(code) → Region | None`
 
-按国标行政区划代码查询单个区划。
+按 adcode 查询单个区划。
 
 ### `get_administrative_tree() → list[dict]`
 
-返回省→市→区县三级行政区划树。每个节点格式：`{"value": "adcode", "label": "名称", "children": [...]}`。覆盖 34 个省级单位（含台湾、香港、澳门），3200+ 区县。该函数不依赖 geopandas，首次调用后缓存。
+返回省→市→区县三级行政区划树。每个节点格式：`{"value": "adcode", "label": "名称", "children": [...]}`。覆盖 34 个省级单位（含台湾、香港、澳门），2800+ 区县。该函数不依赖 geopandas，首次调用后缓存。
 
 ### 数据类
 
@@ -118,7 +118,7 @@ geo.search("朝阳区", city="长春市")        # 仅返回长春的
 @dataclass
 class Region:
     name: str        # "北京市"
-    code: str        # "156110000"
+    code: str        # "110000" (6位 adcode)
     level: str       # "province" | "city" | "district"
     latitude: float  # 代表点纬度
     longitude: float # 代表点经度
@@ -141,33 +141,41 @@ class ReverseResult:
 
 ## 更新数据
 
-### 地理编码数据（天地图 GeoJSON）
+GeoJSON 边界数据和行政区划树使用**同一数据源**（DataV.GeoAtlas），通过脚本一键更新：
 
-从[天地图](https://cloudcenter.tianditu.gov.cn/administrativeDivision/)下载最新数据，分别命名为 `china_province.geojson`、`china_city.geojson`、`china_district.geojson`，然后传入目录路径：
+```bash
+python scripts/fetch_datav_geojson.py
+```
+
+脚本会：
+1. 从 DataV API 递归下载省/市/区县边界数据
+2. 将坐标从 GCJ-02 转换为 WGS-84
+3. 生成 `china_province.geojson`、`china_city.geojson`、`china_district.geojson` 和 `china_admin.json`
+4. 更新 `DATA_VERSION.json`（记录数据源、日期、数量）
+5. 生成 `DATA_UPDATE_REPORT.md`（与上次数据的差异报告）
+6. 自动运行数据校验（数量、adcode、层级关系、几何有效性、地标抽检等）
+
+也可单独运行校验：
+
+```bash
+python scripts/validate_data.py
+```
+
+也可传入自定义数据目录：
 
 ```python
 geo = GeoTool(data_dir="/path/to/data")
 ```
 
-### 行政区划树数据（腾讯 LBS Excel）
-
-1. 从[腾讯位置服务](https://lbs.qq.com/service/webService/webServiceGuide/search/webServiceDistrict#9)下载最新的行政区划编码表 Excel
-2. 将 `.xlsx` 文件放入 `scripts/` 目录
-3. 运行生成脚本：
-
-```bash
-pip install openpyxl  # 仅生成脚本需要，库本身不依赖
-python scripts/generate_admin_data.py
-```
-
-脚本会自动读取 `scripts/` 下的 `.xlsx` 文件，生成 `GeoToolCN/data/china_admin.json`。
-
 ## 数据来源
 
-| 数据源 | 用途 | 更新时间 |
-|--------|------|----------|
-| [天地图](https://cloudcenter.tianditu.gov.cn/administrativeDivision/) | 地理编码（GeoJSON 边界） | 2025 年 9 月 |
-| [腾讯位置服务](https://lbs.qq.com/service/webService/webServiceGuide/search/webServiceDistrict#9) | 行政区划树（adcode 编码） | 2025 年 3 月 |
+| 字段 | 值 |
+|------|-----|
+| 数据源 | [DataV.GeoAtlas](https://datav.aliyun.com/tools/atlas)（阿里云 DataV 地理小工具） |
+| 覆盖范围 | 34 省 / 363 市 / 2874 区县 |
+| 坐标系 | WGS-84（原始 GCJ-02 已转换） |
+| 编码体系 | 6 位 adcode |
+| 最近更新 | 2026 年 3 月 |
 
 ## 许可证
 
