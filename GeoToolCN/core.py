@@ -90,6 +90,21 @@ class GeoTool:
             path = os.path.join(self._data_dir, filename)
             self._levels[level] = _LevelData.load(path)
 
+    @staticmethod
+    def _province_as_city(province: Region) -> Region:
+        """Clone a province Region with level set to ``"city"``.
+
+        Used for municipalities and SARs where the province doubles as
+        the city to match conventional Chinese geocoding API behaviour.
+        """
+        return Region(
+            name=province.name,
+            code=province.code,
+            level="city",
+            latitude=province.latitude,
+            longitude=province.longitude,
+        )
+
     def _point_in_level(self, level: str, point: Point) -> Region | None:
         ld = self._levels[level]
         gdf = ld.gdf
@@ -127,10 +142,14 @@ class GeoTool:
         ReverseResult
         """
         point = Point(lng, lat)
+        province = self._point_in_level("province", point)
+        city = self._point_in_level("city", point)
+        # Municipalities/SARs have no city-level GeoJSON; use province
+        if city is None and province is not None:
+            if province.code[:2] in _MERGED_PREFIXES:
+                city = self._province_as_city(province)
         return ReverseResult(
-            province=self._point_in_level("province", point),
-            city=self._point_in_level("city", point),
-            district=self._point_in_level("district", point),
+            province=province, city=city, district=self._point_in_level("district", point)
         )
 
     def reverse_batch(
@@ -182,6 +201,10 @@ class GeoTool:
                         latitude=round(rep.y, 6),
                         longitude=round(rep.x, 6),
                     )
+            # Municipalities/SARs: fill city from province
+            if kw["city"] is None and kw["province"] is not None:
+                if kw["province"].code[:2] in _MERGED_PREFIXES:
+                    kw["city"] = self._province_as_city(kw["province"])
             results.append(ReverseResult(**kw))
         return results
 
@@ -351,8 +374,8 @@ class GeoTool:
 
         # City
         if is_merged:
-            # Municipalities/SARs have no city-level GeoJSON
-            city = None
+            # Municipalities/SARs have no city-level GeoJSON; use province
+            city = self._province_as_city(province) if province else None
         else:
             city = self._lookup_adcode("city", adcode[:4] + "00")
 
