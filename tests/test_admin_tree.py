@@ -38,6 +38,9 @@ class TestTreeStructure:
 
     def test_every_province_has_children(self, tree: list[dict]) -> None:
         for prov in tree:
+            # Taiwan has no sub-level data in this data source
+            if prov["value"] == "710000":
+                continue
             assert len(prov["children"]) > 0, f"{prov['label']} has no children"
 
     def test_city_children_sorted(self, tree: list[dict]) -> None:
@@ -108,12 +111,12 @@ class TestSAR:
         assert mac["label"] == "澳门特别行政区"
         assert mac["children"][0]["value"] == "820000"
 
-    def test_macau_3_districts(self, tree: list[dict]) -> None:
+    def test_macau_8_districts(self, tree: list[dict]) -> None:
         mac = _find(tree, "820000")
         districts = mac["children"][0]["children"]
-        assert len(districts) == 3
+        assert len(districts) == 8
         names = {d["label"] for d in districts}
-        assert "澳门半岛" in names
+        assert "大堂区" in names
 
 
 # ---------------------------------------------------------------
@@ -126,15 +129,10 @@ class TestTaiwan:
         tw = _find(tree, "710000")
         assert tw["label"] == "台湾省"
 
-    def test_taiwan_20_cities(self, tree: list[dict]) -> None:
+    def test_taiwan_no_children(self, tree: list[dict]) -> None:
+        """DataV does not provide sub-level data for Taiwan."""
         tw = _find(tree, "710000")
-        assert len(tw["children"]) == 20
-
-    def test_taipei_districts(self, tree: list[dict]) -> None:
-        tw = _find(tree, "710000")
-        taipei = _find(tw["children"], "711000")
-        assert taipei["label"] == "台北市"
-        assert len(taipei["children"]) == 12
+        assert len(tw["children"]) == 0
 
 
 # ---------------------------------------------------------------

@@ -36,7 +36,7 @@ class TestReverse:
         r = GeoToolCN.reverse(39.9, 116.4)
         assert r.province is not None
         assert "北京" in r.province.name
-        assert r.province.code.startswith("156")
+        assert r.province.code == "110000"
 
     def test_reverse_miss(self) -> None:
         r = GeoToolCN.reverse(0.0, 0.0)
@@ -61,7 +61,7 @@ class TestSearch:
         assert results[0].name == "深圳市"
 
     def test_by_code(self) -> None:
-        results = GeoToolCN.search("156440300")
+        results = GeoToolCN.search("440300")
         assert len(results) >= 1
         assert "深圳" in results[0].name
 
@@ -77,7 +77,7 @@ class TestRegions:
         assert len(provinces) > 30
 
     def test_get_region(self) -> None:
-        r = GeoToolCN.get_region("156110000")
+        r = GeoToolCN.get_region("110000")
         assert r is not None
         assert isinstance(r, GeoToolCN.Region)
 

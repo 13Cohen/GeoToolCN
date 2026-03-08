@@ -85,7 +85,7 @@ class TestSearch:
         assert results[0].level == "city"
 
     def test_by_code(self, geo: GeoTool) -> None:
-        results = geo.search("156110000")
+        results = geo.search("110000")
         assert len(results) >= 1
         assert "北京" in results[0].name
 
@@ -116,17 +116,17 @@ class TestSearch:
         assert len(all_results) >= 2  # Beijing + Changchun
         beijing_only = geo.search("朝阳区", province="北京市")
         assert len(beijing_only) == 1
-        assert beijing_only[0].code == "156110105"
+        assert beijing_only[0].code == "110105"
 
     def test_filter_by_province_code(self, geo: GeoTool) -> None:
-        results = geo.search("朝阳区", province="156110000")
+        results = geo.search("朝阳区", province="110000")
         assert len(results) == 1
-        assert results[0].code == "156110105"
+        assert results[0].code == "110105"
 
     def test_filter_by_city(self, geo: GeoTool) -> None:
         results = geo.search("朝阳区", city="长春市")
         assert len(results) == 1
-        assert results[0].code == "156220104"
+        assert results[0].code == "220104"
 
     def test_filter_no_match(self, geo: GeoTool) -> None:
         results = geo.search("朝阳区", province="广东省")
@@ -152,12 +152,12 @@ class TestListRegions:
 
 class TestGetRegion:
     def test_found(self, geo: GeoTool) -> None:
-        r = geo.get_region("156110000")
+        r = geo.get_region("110000")
         assert r is not None
         assert "北京" in r.name
 
     def test_not_found(self, geo: GeoTool) -> None:
-        assert geo.get_region("999999999") is None
+        assert geo.get_region("999999") is None
 
 
 # ---------------------------------------------------------------
@@ -183,7 +183,7 @@ class TestConvenienceFunctions:
         assert len(provinces) > 0
 
     def test_get_region(self) -> None:
-        r = get_region("156110000")
+        r = get_region("110000")
         assert r is not None
 
     def test_lookup_adcode(self) -> None:
@@ -232,15 +232,15 @@ class TestLookupAdcode:
         r = geo.lookup_adcode("110108")
         assert r is not None
         assert r.province is not None and "北京" in r.province.name
-        assert r.city is not None and "北京" in r.city.name
+        assert r.city is None
         assert r.district is not None and "海淀" in r.district.name
 
     def test_municipality_city_level(self, geo: GeoTool) -> None:
-        """Beijing city: adcode 110100 -> uses province GB code."""
+        """Beijing city: adcode 110100 -> no city-level data for municipalities."""
         r = geo.lookup_adcode("110100")
         assert r is not None
         assert r.province is not None
-        assert r.city is not None
+        assert r.city is None
 
     def test_sar(self, geo: GeoTool) -> None:
         """Hong Kong province level."""
