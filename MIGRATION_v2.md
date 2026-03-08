@@ -94,34 +94,36 @@ geo.search("朝阳区", province="北京市")
 
 ---
 
-### 4. lookup_adcode() 直辖市的 city 字段
+### 4. 直辖市 `city` 字段行为变更
 
-**变更**：直辖市（北京、上海、天津、重庆）和特别行政区（香港、澳门）的 `lookup_adcode()` 返回结果中，`city` 字段从一个 Region 对象变为 `None`。
+**变更**：直辖市（北京、上海、天津、重庆）和特别行政区（香港、澳门）在 `reverse()`、`reverse_batch()`、`lookup_adcode()` 返回结果中，`city` 字段从 `None` 变为一个与省同名的 Region（level 为 `"city"`）。
 
 ```python
-r = geo.lookup_adcode("110108")  # 北京海淀区
+r = geo.reverse(39.9, 116.4)  # 北京
 
 # 旧版
-r.city  # Region(name='北京市', code='156110000', level='city', ...)
+r.city  # None
 
 # 新版
-r.city  # None
+r.city  # Region(name='北京市', code='110000', level='city', ...)
 ```
 
 **自查方法**：
 
 ```bash
-grep -rn '\.city\.' --include="*.py" your_project/
+grep -rn 'city is None\|city == None\|\.city\.' --include="*.py" your_project/
 ```
 
 **需要修改的典型写法**：
 
 ```python
-# 直接访问 .city 属性会抛 AttributeError
-city_name = r.city.name           # 如果是直辖市，v2.0.0 会报错
+# 用 city is None 判断直辖市 —— v2.0 中不再为 None，逻辑失效
+if result.city is None:
+    print("这是直辖市")
 
-# 安全写法
-city_name = r.city.name if r.city else r.province.name
+# 替代方案：比较省市编码
+if result.province and result.city and result.province.code == result.city.code:
+    print("这是直辖市")
 ```
 
 ---
@@ -173,6 +175,6 @@ city_name = r.city.name if r.city else r.province.name
 
 1. 对照上方清单，全局搜索受影响的代码模式
 2. 将所有 9 位国标码替换为 6 位行政区划码
-3. 为 `lookup_adcode()` 返回的直辖市结果添加 `city` 的空值判断
+3. 检查用 `city is None` 判断直辖市的逻辑（v2.0 中 `city` 不再为 None）
 4. 运行测试，关注边界坐标的归属变化
 5. 如有历史数据存储了 `Region.code`，制定数据迁移方案（去掉 `"156"` 前缀）
