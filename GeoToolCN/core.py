@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Sequence
 
 import geopandas as gpd
@@ -79,7 +79,9 @@ class GeoTool:
     def __init__(self, data_dir: str | None = None) -> None:
         self._data_dir = data_dir or _DEFAULT_DATA_DIR
         self._levels: dict[str, _LevelData] = {}
+        self._parent_city: dict[str, str] = {}
         self._load_all()
+        self._build_parent_index()
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -89,6 +91,54 @@ class GeoTool:
         for level, filename in _FILES.items():
             path = os.path.join(self._data_dir, filename)
             self._levels[level] = _LevelData.load(path)
+
+    def _build_parent_index(self) -> None:
+        """Map every district adcode to its parent city adcode.
+
+        The obvious ``adcode[:4] + "00"`` rule is wrong for the 30 province-
+        directly-governed county-level divisions (省直辖县级行政区) in adcode
+        blocks 4190 (济源), 4290 (仙桃/潜江/天门/神农架), 4690 (海南) and 6590
+        (新疆): it produces codes such as ``419000`` that name no real division.
+        Those divisions instead appear in the city layer under their own code,
+        so the lookup falls back to that.
+        """
+        city_codes = self._levels["city"].code_index
+        for code in self._levels["district"].code_index:
+            prefix2 = code[:2]
+            if prefix2 in _MERGED_PREFIXES:
+                self._parent_city[code] = prefix2 + "0000"
+                continue
+            by_prefix = code[:4] + "00"
+            if by_prefix in city_codes:
+                self._parent_city[code] = by_prefix
+            elif code in city_codes:
+                self._parent_city[code] = code
+
+    def _hierarchy_from_district(self, district: Region) -> ReverseResult:
+        """Build the full province/city/district chain from a resolved district.
+
+        Deriving the upper levels from the district's adcode — rather than
+        testing the point against the province and city polygons independently —
+        is what keeps the chain self-consistent.  The source layers genuinely
+        disagree in places: 加格达奇区 (232718) is administered by 黑龙江省 but
+        lies inside 内蒙古自治区's province polygon, and several district
+        polygons extend past their own province's outline onto offshore islands.
+        An independent per-level lookup reports those as contradictions such as
+        ``province=None`` alongside ``city=舟山市``.
+        """
+        prov_code = district.code[:2] + "0000"
+        province = self._lookup_adcode("province", prov_code)
+
+        city_code = self._parent_city.get(district.code)
+        if city_code is None:
+            city = None
+        elif city_code == prov_code:
+            # Municipality / SAR: the province doubles as the city.
+            city = self._province_as_city(province) if province else None
+        else:
+            city = self._lookup_adcode("city", city_code)
+
+        return ReverseResult(province=province, city=city, district=district)
 
     @staticmethod
     def _province_as_city(province: Region) -> Region:
@@ -142,20 +192,30 @@ class GeoTool:
         ReverseResult
         """
         point = Point(lng, lat)
+        district = self._point_in_level("district", point)
+        if district is not None:
+            return self._hierarchy_from_district(district)
+
+        # No district matched (offshore gaps, disputed strips): fall back to
+        # independent per-level lookups.
         province = self._point_in_level("province", point)
         city = self._point_in_level("city", point)
         # Municipalities/SARs have no city-level GeoJSON; use province
         if city is None and province is not None:
             if province.code[:2] in _MERGED_PREFIXES:
                 city = self._province_as_city(province)
-        return ReverseResult(
-            province=province, city=city, district=self._point_in_level("district", point)
-        )
+        return ReverseResult(province=province, city=city, district=None)
 
     def reverse_batch(
         self, coords: Sequence[tuple[float, float]]
     ) -> list[ReverseResult]:
-        """Reverse-geocode many coordinates at once using spatial join.
+        """Reverse-geocode many coordinates.
+
+        Delegates to :meth:`reverse` per point.  Earlier versions used
+        ``gpd.sjoin``, but the join was measured slower than the per-point
+        R-tree path at every batch size tried (1.10x at 50k points, 1.27x at
+        1k) — and its per-point result extraction rescanned the whole join
+        frame, making 1000 points take 870 ms against 310 ms for a plain loop.
 
         Parameters
         ----------
@@ -165,48 +225,7 @@ class GeoTool:
         -------
         list[ReverseResult]
         """
-        if not coords:
-            return []
-
-        points = [Point(lng, lat) for lat, lng in coords]
-        pts_gdf = gpd.GeoDataFrame(
-            {"idx": range(len(coords))},
-            geometry=points,
-            crs=self._levels["province"].gdf.crs,
-        )
-
-        joined: dict[str, pd.DataFrame] = {}
-        for level in _LEVELS:
-            gdf = self._levels[level].gdf
-            j = gpd.sjoin(pts_gdf, gdf, how="left", predicate="within")
-            joined[level] = j
-
-        results: list[ReverseResult] = []
-        for i, pt in enumerate(points):
-            kw: dict[str, Region | None] = {}
-            for level in _LEVELS:
-                j = joined[level]
-                rows = j[j["idx"] == i]
-                if rows.empty or pd.isna(rows.iloc[0].get("index_right")):
-                    kw[level] = None
-                else:
-                    row = rows.iloc[0]
-                    level_gdf = self._levels[level].gdf
-                    matched_geom = level_gdf.iloc[int(row["index_right"])].geometry
-                    rep = matched_geom.representative_point()
-                    kw[level] = Region(
-                        name=row["name"],
-                        code=str(row["adcode"]),
-                        level=level,
-                        latitude=round(rep.y, 6),
-                        longitude=round(rep.x, 6),
-                    )
-            # Municipalities/SARs: fill city from province
-            if kw["city"] is None and kw["province"] is not None:
-                if kw["province"].code[:2] in _MERGED_PREFIXES:
-                    kw["city"] = self._province_as_city(kw["province"])
-            results.append(ReverseResult(**kw))
-        return results
+        return [self.reverse(lat, lng) for lat, lng in coords]
 
     # ------------------------------------------------------------------
     # Forward geocoding / search
@@ -220,6 +239,7 @@ class GeoTool:
         province: str | None = None,
         city: str | None = None,
         fuzzy: bool = True,
+        regex: bool = False,
     ) -> list[Region]:
         """Search for regions by name or adcode.
 
@@ -236,6 +256,12 @@ class GeoTool:
         fuzzy : bool
             If *True* (default), also match regions whose name *contains*
             the query when no exact match is found.
+        regex : bool
+            Treat *query* as a regular expression during fuzzy matching.
+            Defaults to *False* (plain substring).  Versions up to 2.0.x
+            always matched as a regex, so ``search("东.区")`` matched every
+            three-character name ending in 区 and ``search("[")`` raised
+            ``re.error``.  Pass ``regex=True`` to restore that behaviour.
 
         Returns
         -------
@@ -264,7 +290,9 @@ class GeoTool:
                         row = ld.gdf.iloc[pos]
                         results.append(self._row_to_region(row, lvl))
                 elif fuzzy:
-                    matched = ld.gdf[ld.gdf["name"].str.contains(query, na=False)]
+                    matched = ld.gdf[
+                        ld.gdf["name"].str.contains(query, na=False, regex=regex)
+                    ]
                     for _, row in matched.iterrows():
                         results.append(self._row_to_region(row, lvl))
 
@@ -372,17 +400,28 @@ class GeoTool:
         if level == "province":
             return ReverseResult(province=province) if province else None
 
-        # City
+        # City.  For district-level codes the parent index is authoritative:
+        # province-directly-governed county-level divisions such as 济源市
+        # (419001) are their own city, which ``adcode[:4] + "00"`` cannot express.
         if is_merged:
             # Municipalities/SARs have no city-level GeoJSON; use province
             city = self._province_as_city(province) if province else None
+        elif level == "district":
+            city_code = self._parent_city.get(adcode)
+            city = self._lookup_adcode("city", city_code) if city_code else None
         else:
             city = self._lookup_adcode("city", adcode[:4] + "00")
 
         if level == "city":
-            if province is None and city is None:
+            # Prefecture-level cities with no subdivisions (东莞市, 中山市,
+            # 儋州市, 嘉峪关市) are published at both the city and district
+            # level under the same adcode, so reverse() resolves them as a
+            # district.  Report the district here too, or the two APIs
+            # disagree about the same code.
+            district = self._lookup_adcode("district", adcode)
+            if province is None and city is None and district is None:
                 return None
-            return ReverseResult(province=province, city=city)
+            return ReverseResult(province=province, city=city, district=district)
 
         # District
         district = self._lookup_adcode("district", adcode)
@@ -460,27 +499,35 @@ class GeoTool:
     def _filter_by_parent(
         self, regions: list[Region], parent_level: str, parent_query: str
     ) -> list[Region]:
-        """Keep only regions whose representative point is within *parent_query*."""
-        # Resolve parent geometry
+        """Keep only regions administratively under *parent_query*.
+
+        Filtering by adcode relationship rather than by geometry: a region's
+        representative point can fall outside its own parent's polygon — the
+        source layers do not nest perfectly — which silently dropped valid
+        matches.  ``search("嵊泗县", province="浙江省")`` used to return nothing
+        because 嵊泗县 is an island group lying outside 浙江省's outline.
+        """
         parent_ld = self._levels[parent_level]
         if parent_query.isdigit():
-            pos = parent_ld.code_index.get(parent_query)
-            if pos is None:
+            if parent_query not in parent_ld.code_index:
                 return []
-            parent_geom = parent_ld.gdf.iloc[pos].geometry
+            parent_code = parent_query
         else:
             positions = parent_ld.name_index.get(parent_query)
             if not positions:
                 return []
-            parent_geom = parent_ld.gdf.iloc[positions[0]].geometry
+            parent_code = str(parent_ld.gdf.iloc[positions[0]]["adcode"])
 
-        filtered: list[Region] = []
-        for r in regions:
-            if r.latitude is not None and r.longitude is not None:
-                pt = Point(r.longitude, r.latitude)
-                if parent_geom.contains(pt):
-                    filtered.append(r)
-        return filtered
+        return [r for r in regions if self._is_under(r, parent_level, parent_code)]
+
+    def _is_under(self, region: Region, parent_level: str, parent_code: str) -> bool:
+        """Whether *region* sits at or below *parent_code* in the hierarchy."""
+        if parent_level == "province":
+            return region.code[:2] == parent_code[:2]
+        # parent_level == "city"
+        if region.level == "district":
+            return self._parent_city.get(region.code) == parent_code
+        return region.code == parent_code
 
     @staticmethod
     def _row_to_region(row: pd.Series, level: str) -> Region:

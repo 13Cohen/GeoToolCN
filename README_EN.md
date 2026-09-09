@@ -88,9 +88,9 @@ Reverse-geocode a single WGS-84 coordinate.
 
 ### `geo.reverse_batch(coords) → list[ReverseResult]`
 
-Reverse-geocode many `(lat, lng)` pairs at once using spatial join.
+Reverse-geocode many `(lat, lng)` pairs at once.
 
-### `geo.search(query, *, level=None, province=None, city=None, fuzzy=True) → list[Region]`
+### `geo.search(query, *, level=None, province=None, city=None, fuzzy=True, regex=False) → list[Region]`
 
 Search by region name or adcode. Set `level` to `"province"`, `"city"`, or `"district"` to narrow results. Use `province` or `city` to disambiguate regions with the same name (accepts name or adcode). Fuzzy matching is enabled by default.
 
@@ -137,7 +137,7 @@ class ReverseResult:
 |-----------|--------|----------------|
 | Load data | Every call (~2s) | Once on init (~2s) |
 | Single reverse | ~2s (brute-force) | ~1ms (R-tree index) |
-| Batch 1000 pts | ~2000s | ~1s (spatial join) |
+| Batch 1000 pts | ~2000s | ~0.11s |
 | Forward search | ~0.5s (scan) | <0.1ms (dict index) |
 
 ## Updating Data

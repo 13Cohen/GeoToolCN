@@ -87,11 +87,18 @@ regions = search("深圳市")
 
 ### `geo.reverse_batch(coords) → list[ReverseResult]`
 
-使用空间连接对多个 `(lat, lng)` 坐标对进行批量逆地理编码。
+对多个 `(lat, lng)` 坐标对进行批量逆地理编码。
 
-### `geo.search(query, *, level=None, province=None, city=None, fuzzy=True) → list[Region]`
+### `geo.search(query, *, level=None, province=None, city=None, fuzzy=True, regex=False) → list[Region]`
 
-按地名或 adcode 搜索。设置 `level` 为 `"province"`、`"city"` 或 `"district"` 可缩小搜索范围。使用 `province` 或 `city` 参数可消除同名区划的歧义（接受地名或 adcode）。默认开启模糊匹配。
+按地名或 adcode 搜索。设置 `level` 为 `"province"`、`"city"` 或 `"district"` 可缩小搜索范围。使用 `province` 或 `city` 参数可消除同名区划的歧义（接受地名或 adcode）。默认开启模糊匹配（按子串）。
+
+`regex=True` 可将查询串按正则表达式匹配 —— 这是 2.0.x 及更早版本的默认行为：
+
+```python
+geo.search("东.区")               # 0 条：按字面匹配
+geo.search("东.区", regex=True)   # 18 条："." 作为正则通配符
+```
 
 ```python
 # "朝阳区"在北京和长春都存在
@@ -132,12 +139,15 @@ class ReverseResult:
 
 ## 性能
 
-| 操作 | 优化前 | GeoToolCN v1.0 |
-|------|--------|----------------|
-| 加载数据 | 每次调用 (~2s) | 初始化一次 (~2s) |
-| 单次逆编码 | ~2s（暴力遍历） | ~1ms（R-tree 索引） |
-| 批量 1000 点 | ~2000s | ~1s（空间连接） |
+| 操作 | 优化前 | 当前 |
+|------|--------|------|
+| 加载数据 | 每次调用 (~2s) | 初始化一次 (~1.2s) |
+| 单次逆编码 | ~2s（暴力遍历） | ~0.1ms（R-tree 索引） |
+| 批量 1000 点 | ~2000s | ~0.11s |
 | 正向搜索 | ~0.5s（扫描） | <0.1ms（字典索引） |
+
+> v2.1.0 起 `reverse_batch()` 改为逐点调用 `reverse()`。此前基于 `gpd.sjoin` 的实现在实测中
+> 于所有批量规模下都慢于逐点路径，且其结果提取步骤为 O(n²)——1000 个点需 870 ms。
 
 ## 更新数据
 

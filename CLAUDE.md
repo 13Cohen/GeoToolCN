@@ -9,7 +9,8 @@ Offline geocoding toolkit for Chinese administrative regions. Converts GPS coord
 - **Package**: `GeoToolCN/` (source), published as `geotool-cn`
 - **Tests**: `tests/test_geotool.py` — run with `pytest`
 - **Build**: `pyproject.toml` only (setuptools backend, no setup.py)
-- **CI/CD**: `.github/workflows/publish.yml` — auto-publish to PyPI on GitHub release
+- **CI/CD**: `.github/workflows/test.yml` — pytest matrix (3.9–3.12) + data validation on push/PR;
+  `.github/workflows/publish.yml` — auto-publish to PyPI on GitHub release
 
 ## Commands
 ```bash
@@ -18,6 +19,12 @@ pytest
 
 # Run specific test class
 pytest tests/test_geotool.py::TestReverse
+
+# Structural invariants only (100% adcode coverage, no golden values)
+pytest tests/test_invariants.py
+
+# Validate bundled data
+python scripts/validate_data.py
 
 # Update bundled data (fetches from DataV API, converts GCJ-02→WGS-84)
 python scripts/fetch_datav_geojson.py
@@ -40,7 +47,22 @@ pip install -e .
 - `scripts/generate_admin_data.py` — Legacy script (腾讯 Excel → china_admin.json, no longer used)
 - `tests/test_geotool.py` — pytest test suite for geocoding (module-scoped fixture)
 - `tests/test_admin_tree.py` — pytest test suite for admin tree
+- `tests/test_invariants.py` — structural invariants (INV-01..12); asserts properties that
+  must hold for *every* region, so one test yields thousands of assertions
+- `scripts/validate_data.py` — 10 categories of bundled-data checks; run in CI
 - `DATA_UPDATE_REPORT.md` — Auto-generated report from last data update
+
+### Hierarchy Resolution — read before touching `reverse()`
+The province/city/district chain is derived from the **district's adcode**, not from three
+independent point-in-polygon tests.  The source layers genuinely disagree: 加格达奇区 is
+administered by 黑龙江 but sits inside 内蒙古's province polygon, some district polygons
+extend past their province onto offshore islands, and city polygons overlap across
+prefecture borders.  Independent per-level lookups produce self-contradictory results.
+- `_parent_city` (built in `_build_parent_index`) maps district adcode → city adcode.
+  Do **not** use `adcode[:4] + "00"` — it is wrong for the 30 province-directly-governed
+  county-level divisions (blocks 4190/4290/4690/6590), yielding codes like `419000`.
+- Independent per-level lookup survives only as the fallback for points where no district
+  matches (offshore gaps).
 
 ### Key Classes
 - **`GeoTool`**: Main API class — `reverse()`, `reverse_batch()`, `search()`, `list_regions()`, `get_region()`
@@ -49,7 +71,7 @@ pip install -e .
 
 ### Performance Patterns
 - R-tree spatial index via GeoPandas `sindex` for O(log n) point-in-polygon
-- `gpd.sjoin()` for batch spatial joins
+- `reverse_batch()` loops `reverse()`; `gpd.sjoin()` measured slower at every batch size
 - Dict-based `name_index` and `code_index` for O(1) lookups
 - `make_valid()` on load to fix invalid geometries from data source
 
