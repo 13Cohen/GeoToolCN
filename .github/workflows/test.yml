@@ -105,18 +105,12 @@ jobs:
       - name: Run conformance suite
         run: python conformance/run.py
 
-      # The suite is generated from this implementation, so it must reproduce
-      # byte-for-byte. A diff means the implementation changed without the
-      # golden set being regenerated and reviewed.
+      # The suite is generated from this implementation, so it must still match.
+      # Compared per file rather than with `git diff`: coords.jsonl holds sin/cos
+      # results at 12 decimals, and libm differs between platforms in the last
+      # digits, so byte-equality would fail on a correct file.
       - name: Check the suite is up to date
-        run: |
-          python conformance/generate.py
-          if ! git diff --quiet -- conformance/; then
-            echo "::error::conformance 数据集与当前实现不一致。"
-            echo "请运行 python conformance/generate.py，审阅 diff 后提交。"
-            git diff --stat -- conformance/
-            exit 1
-          fi
+        run: python conformance/generate.py --check
 
   no-runtime-dependencies:
     runs-on: ubuntu-latest
@@ -134,7 +128,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install .
 
+      # Everything below runs from /tmp on purpose. Run from the checkout and
+      # `import GeoToolCN` resolves to the source tree — which carries the 28 MB
+      # of GeoJSON the wheel deliberately excludes — so the check would measure
+      # the repository instead of the installed package.
       - name: Assert no third-party dependencies
+        working-directory: /tmp
         run: |
           REQUIRES=$(pip show geotool-cn | grep '^Requires:' | cut -d: -f2- | tr -d ' ')
           if [ -n "$REQUIRES" ]; then
@@ -143,27 +142,33 @@ jobs:
           fi
           python - <<'PY'
           import sys
+          import GeoToolCN
+          if "geopandas" in sys.modules or "shapely" in sys.modules:
+              raise SystemExit("importing GeoToolCN pulled in the geospatial stack")
           for blocked in ("geopandas", "shapely", "pandas", "numpy"):
               sys.modules[blocked] = None      # force ImportError on use
-          import GeoToolCN
           result = GeoToolCN.reverse(39.9042, 116.4074)
           assert result.district.name == "东城区", result
           assert len(GeoToolCN.get_administrative_tree()) == 34
-          print("ok, no geospatial stack required")
+          print(f"ok, no geospatial stack required — {GeoToolCN.__file__}")
           PY
 
       - name: Report installed size
+        working-directory: /tmp
         run: |
           python - <<'PY'
-          import os, GeoToolCN
+          import os, sysconfig
+          import GeoToolCN
           root = os.path.dirname(GeoToolCN.__file__)
+          if not root.startswith(sysconfig.get_paths()["purelib"]):
+              raise SystemExit(f"measured the source tree, not the install: {root}")
           total = sum(
               os.path.getsize(os.path.join(dirpath, name))
               for dirpath, _, names in os.walk(root)
               for name in names
           )
-          print(f"installed: {total / 1048576:.2f} MB")
-          assert total < 8 * 1048576, "package grew beyond 8 MB"
+          print(f"installed: {total / 1048576:.2f} MB at {root}")
+          assert total < 8 * 1048576, f"package grew beyond 8 MB ({total / 1048576:.2f} MB)"
           PY
 
   # L4: every implementation is checked against one suite. Adding a language

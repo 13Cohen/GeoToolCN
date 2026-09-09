@@ -14,12 +14,15 @@ over-sample those.
 """
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import math
 import os
 import random
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
@@ -39,6 +42,12 @@ from GeoToolCN import (  # noqa: E402
 
 OUT_DIR = Path(__file__).resolve().parent
 SEED = 20260909
+
+# Coordinate conversions go through sin/cos, and libm differs between platforms
+# in the last couple of digits. Stored at 12 decimals those differences show up,
+# so coords.jsonl cannot be compared byte for byte across machines — the freshness
+# check compares it numerically, at the same tolerance the suite itself applies.
+FRESHNESS_TOLERANCE = {"coords.jsonl": 1e-9}
 
 BOUNDARY_PER_DISTRICT = 3
 UNIFORM_SAMPLES = 5000
@@ -122,7 +131,59 @@ def boundary_points(geometry, count: int, rng: random.Random):
         return []
 
 
+def compare_against_committed(generated_dir: Path) -> list[str]:
+    """Report how a freshly generated suite differs from the committed one."""
+    problems: list[str] = []
+    for path in sorted(generated_dir.iterdir()):
+        committed = OUT_DIR / path.name
+        if not committed.exists():
+            problems.append(f"{path.name}: missing from the repository")
+            continue
+        tolerance = FRESHNESS_TOLERANCE.get(path.name)
+        if tolerance is None:
+            if committed.read_bytes() != path.read_bytes():
+                problems.append(f"{path.name}: differs")
+            continue
+
+        want = [json.loads(line) for line in committed.read_text("utf-8").splitlines() if line]
+        got = [json.loads(line) for line in path.read_text("utf-8").splitlines() if line]
+        if len(want) != len(got):
+            problems.append(f"{path.name}: {len(want)} cases committed, {len(got)} generated")
+            continue
+        drifted = 0
+        for a, b in zip(want, got):
+            if a["id"] != b["id"] or a["in"] != b["in"]:
+                problems.append(f"{path.name}: case {a['id']} changed shape")
+                break
+            aw, bw = a["out"], b["out"]
+            aw = aw if isinstance(aw, list) else [aw]
+            bw = bw if isinstance(bw, list) else [bw]
+            if any(abs(x - y) > tolerance for x, y in zip(aw, bw)):
+                drifted += 1
+        if drifted:
+            problems.append(
+                f"{path.name}: {drifted}/{len(want)} cases differ by more than {tolerance}"
+            )
+    return problems
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="regenerate into a temporary directory and report differences "
+        "instead of overwriting the committed suite",
+    )
+    args = parser.parse_args()
+
+    global OUT_DIR
+    committed_dir = OUT_DIR
+    temp_dir = None
+    if args.check:
+        temp_dir = Path(tempfile.mkdtemp(prefix="conformance-check-"))
+        OUT_DIR = temp_dir
+
     print("Generating conformance suite from the reference implementation...\n")
     geo = GeoTool()
     rng = random.Random(SEED)
@@ -422,6 +483,18 @@ def main() -> None:
     )
     total = n_reverse + n_lookup + n_search + n_coords + n_containment
     print(f"\n共 {total:,} 条用例。")
+
+    if temp_dir is not None:
+        OUT_DIR = committed_dir
+        problems = compare_against_committed(temp_dir)
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        if problems:
+            print("\n数据集与当前实现不一致：")
+            for problem in problems:
+                print(f"  {problem}")
+            print("\n请运行 python conformance/generate.py，审阅 diff 后提交。")
+            raise SystemExit(1)
+        print("数据集与当前实现一致。")
 
 
 if __name__ == "__main__":
