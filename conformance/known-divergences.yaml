@@ -200,3 +200,54 @@ divergences:
     affects: [GeoTool.__init__]
     match: null
     samples: []
+
+  - id: DIV-103
+    title: 无区县时的 city 不再跨省矛盾
+    kind: bugfix
+    applies_to: "2.1.0 -> 3.0.0"
+    status: expected
+    reason: >
+      v2.1 在没有区县命中时，仍对 city 图层独立做点在多边形判定，因此可能返回
+      与自己 province 不同省的市。v3 此时只从省级网格取 province，直辖市/特别
+      行政区的 city 由 province 派生，其余为空，结构上不可能跨省。
+    affects: [reverse, reverse_batch]
+    match:
+      condition: "old.district == null and old.city[:2] != old.province[:2]"
+    samples:
+      - {lat: 30.571865, lng: 108.692278, old: ["500000", "422800", null],
+         new: ["500000", "500000", null], note: 重庆市境内却返回恩施州}
+
+  - id: DIV-104
+    title: 边界附近的归属因量化而翻转
+    kind: acceptable-loss
+    applies_to: "2.1.0 -> 3.0.0"
+    status: expected
+    reason: >
+      .gtc 把坐标量化到 1e-5 度（约 1.11 米），因此距行政边界不足一个量化步长的
+      点可能落到另一侧。实测 16509 个反查用例中 10 条（0.061%），全部距争议边界
+      0.019 ~ 0.460 米，均在一个量化步长内。这些点本就落在数据自身精度之下——
+      DataV 边界的名义精度远粗于半米。
+    affects: [reverse, reverse_batch, is_in_china, is_in_region]
+    match:
+      condition: "distance_to_disputed_boundary < 1 quantisation step"
+    samples:
+      - {lat: 35.159165, lng: 114.280733, old: "410727", new: "410726", metres: 0.019}
+      - {lat: 31.077564, lng: 117.899444, old: "340281", new: "340706", metres: 0.019}
+      - {lat: 36.370829, lng: 120.859146, old: "370215", new: null, metres: 0.113}
+      - {lat: 29.779500, lng: 112.933955, old: "421023", new: "430623", metres: 0.460}
+
+  - id: DIV-105
+    title: is_in_china 与 reverse 不再互相矛盾
+    kind: bugfix
+    applies_to: "2.1.0 -> 3.0.0"
+    status: expected
+    reason: >
+      v2.1 的 is_in_china 直接判省级多边形，而 reverse 由区县 adcode 反推 province。
+      离岛因此得到 is_in_china=False 却同时 reverse().province=浙江省。SPEC §2.8
+      规定两者等价；v3 先查区县网格再回退省级网格，二者同源。
+    affects: [is_in_china]
+    match:
+      condition: "old.is_in_china == false and old.reverse().province != null"
+    samples:
+      - {lat: 30.66457, lng: 122.56396, note: 嵊泗县}
+      - {lat: 28.04746, lng: 121.13337, note: 玉环市}

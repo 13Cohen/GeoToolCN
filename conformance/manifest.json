@@ -1,6 +1,6 @@
 {
   "spec_version": 1,
-  "generated_from": "reference implementation (geopandas)",
+  "generated_from": "GeoToolCN (.gtc implementation)",
   "seed": 20260909,
   "data_version": {
     "source": "DataV.GeoAtlas (阿里云 DataV 地理小工具)",

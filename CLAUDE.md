@@ -5,7 +5,8 @@ Offline geocoding toolkit for Chinese administrative regions. Converts GPS coord
 
 ## Quick Reference
 - **Language**: Python 3.9+
-- **Dependencies**: geopandas (>=0.14), shapely (>=2)
+- **Dependencies**: none at runtime. geopandas/shapely are dev-only extras,
+  needed to rebuild the data and to run the differential test
 - **Package**: `GeoToolCN/` (source), published as `geotool-cn`
 - **Tests**: `tests/test_geotool.py` — run with `pytest`
 - **Build**: `pyproject.toml` only (setuptools backend, no setup.py)
@@ -30,6 +31,15 @@ python scripts/validate_data.py
 python conformance/run.py
 python conformance/generate.py
 
+# Differential test against the geopandas oracle (needs the dev extras)
+python conformance/differential.py -n 200000
+
+# Rebuild the shipped dataset
+python pipeline/build_gtc.py
+
+# Guard README's CRLF endings against script-driven edits
+python scripts/check_line_endings.py
+
 # Update bundled data (fetches from DataV API, converts GCJ-02→WGS-84)
 python scripts/fetch_datav_geojson.py
 
@@ -42,11 +52,16 @@ pip install -e .
 
 ## Architecture
 - `GeoToolCN/__init__.py` — Public API exports + module-level convenience functions (lazy singleton)
-- `GeoToolCN/core.py` — Core implementation: `GeoTool`, `Region`, `ReverseResult` classes
+- `GeoToolCN/core.py` — `GeoTool`, `Region`, `ReverseResult`, on top of the .gtc reader
+- `GeoToolCN/_gtc.py` — .gtc binary reader (stdlib only); the model for every port
+- `pipeline/build_gtc.py` — builds the .gtc from GeoJSON; all the expensive work lives here
+- `reference/geopandas_impl.py` — the geopandas implementation, kept as an oracle for
+  `conformance/differential.py`. Not shipped, not published
 - `GeoToolCN/admin_tree.py` — Administrative tree builder (zero geopandas dependency)
 - `GeoToolCN/_hierarchy.py` — Parent/merged-prefix rules shared by `core` and `admin_tree`,
   stdlib-only so the tree builder stays free of geopandas
-- `GeoToolCN/data/*.geojson` — Bundled GeoJSON files (province/city/district boundaries)
+- `GeoToolCN/data/china.full.gtc` — the shipped dataset (6 MB)
+- `GeoToolCN/data/*.geojson` — pipeline input; in the repo but NOT in the wheel (28 MB)
 - `GeoToolCN/data/china_admin.json` — Lightweight admin division data for tree builder
 - `GeoToolCN/data/DATA_VERSION.json` — Data version metadata (source, date, counts)
 - `scripts/fetch_datav_geojson.py` — Fetch & convert data from DataV API, generates diff report
@@ -81,8 +96,10 @@ prefecture borders.  Independent per-level lookups produce self-contradictory re
 - **`ReverseResult`**: Dataclass — optional `province`, `city`, `district` (each a `Region`)
 
 ### Performance Patterns
-- R-tree spatial index via GeoPandas `sindex` for O(log n) point-in-polygon
-- `reverse_batch()` loops `reverse()`; `gpd.sjoin()` measured slower at every batch size
+- The grid index answers ~77% of lookups from a run-length table with no geometry at all;
+  the rest average 2 candidate polygons. That is why no geometry library is needed
+- Polygons are decoded lazily and cached — parsing all ~1M vertices up front would cost seconds
+- Integer tables are fixed-width so `array.frombytes` over the mmap is a memcpy
 - Dict-based `name_index` and `code_index` for O(1) lookups
 - `make_valid()` on load to fix invalid geometries from data source
 

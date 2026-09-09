@@ -146,7 +146,12 @@ def main() -> None:
             tags.append("city-and-district")
         samples.append((r.latitude, r.longitude, tags))
 
-    gdf = geo._levels["district"].gdf
+    # Boundary sampling needs real geometry, which the shipped implementation
+    # does not expose; borrow it from the reference. Expected values still come
+    # from the shipped implementation — it is the one the spec describes.
+    from reference.geopandas_impl import GeoTool as ReferenceGeoTool  # noqa: PLC0415
+
+    gdf = ReferenceGeoTool()._levels["district"].gdf
     for i in range(len(gdf)):
         for lat, lng in boundary_points(gdf.iloc[i].geometry, BOUNDARY_PER_DISTRICT, rng):
             samples.append((lat, lng, ["boundary"]))
@@ -385,7 +390,7 @@ def main() -> None:
     )
     manifest = {
         "spec_version": 1,
-        "generated_from": "reference implementation (geopandas)",
+        "generated_from": "GeoToolCN (.gtc implementation)",
         "seed": SEED,
         "data_version": data_version,
         "counts": {

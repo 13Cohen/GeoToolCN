@@ -3269,8 +3269,8 @@
 {"id":"cnt-003268","tags":["is_in_region","self","district"],"fn":"is_in_region","in":[22.160749,113.563721,"820006"],"out":true}
 {"id":"cnt-003269","tags":["is_in_region","self","district"],"fn":"is_in_region","in":[22.143134,113.565155,"820007"],"out":true}
 {"id":"cnt-003270","tags":["is_in_region","self","district"],"fn":"is_in_region","in":[22.129193,113.573677,"820008"],"out":true}
-{"id":"cnt-003271","tags":["is_in_china","island"],"fn":"is_in_china","in":[30.66457,122.56396],"out":false}
-{"id":"cnt-003272","tags":["is_in_china","island"],"fn":"is_in_china","in":[28.04746,121.13337],"out":false}
+{"id":"cnt-003271","tags":["is_in_china","island"],"fn":"is_in_china","in":[30.66457,122.56396],"out":true}
+{"id":"cnt-003272","tags":["is_in_china","island"],"fn":"is_in_china","in":[28.04746,121.13337],"out":true}
 {"id":"cnt-003273","tags":["is_in_china","island"],"fn":"is_in_china","in":[30.21028,105.65155],"out":true}
 {"id":"cnt-003274","tags":["is_in_china","island"],"fn":"is_in_china","in":[45.02629,82.58717],"out":true}
 {"id":"cnt-003275","tags":["is_in_china","layer-conflict"],"fn":"is_in_china","in":[40.87535,109.89243],"out":true}
