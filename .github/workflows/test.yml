@@ -56,6 +56,35 @@ jobs:
       - name: Check line endings
         run: python scripts/check_line_endings.py
 
+      # L0 (RFC-002): checks the built artifact, not its behaviour. Conformance
+      # only reaches a file that loads at all.
+      - name: Validate the shipped dataset
+        run: python scripts/validate_gtc.py --round-trip
+
+      # All three tiers are a documented contract (SPEC §4.1), so all three must
+      # build and validate — otherwise only `full` is ever really exercised.
+      - name: Build and validate every tier
+        run: |
+          for tier in mini lite; do
+            python pipeline/build_gtc.py --dataset "$tier" --out "/tmp/china.$tier.gtc"
+            python scripts/validate_gtc.py "/tmp/china.$tier.gtc"
+          done
+
+      - name: A geometry-free dataset must refuse geometry calls
+        run: |
+          python - <<'PY'
+          from GeoToolCN._gtc import GTCData, GeometryUnavailable
+          data = GTCData("/tmp/china.mini.gtc")
+          assert not data.has_geometry
+          assert data.record_count == 3271
+          try:
+              data.locate(39.9, 116.4)
+          except GeometryUnavailable:
+              print("mini correctly refuses geometry lookups")
+          else:
+              raise SystemExit("mini answered a geometry query without geometry")
+          PY
+
   conformance:
     runs-on: ubuntu-latest
     steps:

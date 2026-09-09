@@ -35,8 +35,12 @@ python conformance/generate.py
 # Differential test against the geopandas oracle (needs the dev extras)
 python conformance/differential.py -n 200000
 
-# Rebuild the shipped dataset
+# Rebuild the shipped dataset and validate it
 python pipeline/build_gtc.py
+python scripts/validate_gtc.py --round-trip
+
+# The other tiers (SPEC §4.1) — built in CI, not committed
+python pipeline/build_gtc.py --dataset lite --out /tmp/china.lite.gtc
 
 # Guard README's CRLF endings against script-driven edits
 python scripts/check_line_endings.py
@@ -71,7 +75,10 @@ pip install -e .
 - `tests/test_admin_tree.py` — pytest test suite for admin tree
 - `tests/test_invariants.py` — structural invariants (INV-01..12); asserts properties that
   must hold for *every* region, so one test yields thousands of assertions
-- `scripts/validate_data.py` — 10 categories of bundled-data checks; run in CI
+- `scripts/validate_data.py` — 10 categories of source-GeoJSON checks; run in CI
+- `scripts/validate_gtc.py` — L0 checks on a built `.gtc`: CRC, metadata ordering, parent
+  coverage, representative points, every solid grid run, and a cross-check against the
+  source geometry. `--round-trip` also asserts the build is deterministic
 - `SPEC.md` — the cross-language contract: API semantics, tie-breaking rules, GTC binary
   format. Behaviour changes go here first, then into the implementation
 - `conformance/` — language-neutral golden suite (~35k cases). `generate.py` rebuilds it

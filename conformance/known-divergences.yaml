@@ -189,17 +189,25 @@ divergences:
       - {lat: 22.97637, lng: 110.74743, old_city: "450900", note: 玉林市辖域内的区县空隙}
 
   - id: DIV-102
-    title: data_dir 参数语义扩展
+    title: data_dir 不再接受 GeoJSON 目录
     kind: api-change
     applies_to: "2.1.0 -> 3.0.0"
     status: expected
     reason: >
-      v3 的数据载体是单个 .gtc 文件而非 GeoJSON 目录。按决策 D3 保持兼容：
-      传入目录时仍按旧路径读取 GeoJSON，传入 .gtc 文件走新路径。
-      纯新增，不破坏既有调用。
+      决策 D3 原定「传入目录时仍按旧路径读取 GeoJSON」以保持兼容，但该决策是在
+      架构定型前做出的，事后不可行：v3 不依赖 geopandas，也就无从读取 GeoJSON。
+      保留这条路径等于把 135 MB 的依赖重新装回来，与 v3 的全部意义相悖。
+
+      实际行为：data_dir 接受 .gtc 文件路径，或含 china.full.gtc 的目录；
+      传入只有 GeoJSON 的目录会抛出 FileNotFoundError，并提示改用
+      pipeline/build_gtc.py 构建。绝大多数调用方不传该参数，不受影响。
+
+      D3 因此作废，以本条为准。MIGRATION_v3.md §2 描述的是实际行为。
     affects: [GeoTool.__init__]
     match: null
-    samples: []
+    samples:
+      - {data_dir: "path/to/geojson/", old: "读取 GeoJSON", new: "raises FileNotFoundError"}
+      - {data_dir: "path/to/custom.gtc", old: "不支持", new: "读取该 .gtc"}
 
   - id: DIV-103
     title: 无区县时的 city 不再跨省矛盾
