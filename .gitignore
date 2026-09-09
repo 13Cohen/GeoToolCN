@@ -13,3 +13,5 @@ build/
 scripts/*.xlsx
 packages/node/data/
 packages/node/node_modules/
+packages/go/data/*.gtc
+packages/go/data/*.json

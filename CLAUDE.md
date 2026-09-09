@@ -80,6 +80,9 @@ pip install -e .
   adding an adapter here and a row to the CI matrix
 - `packages/node/` — `@geotoolcn/core`, zero dependencies, ESM. Plain JS with JSDoc plus a
   hand-written `index.d.ts`: no build step, so nothing to keep in sync with the source
+- `packages/go/` — `geotoolcn-go`, no cgo, dataset via `go:embed`. Published from a
+  read-only mirror repo, because a module in a monorepo subdirectory forces the import
+  path `.../GeoToolCN/packages/go` and tags of the form `packages/go/v1.0.0`
 - `DATA_UPDATE_REPORT.md` — Auto-generated report from last data update
 
 ### Hierarchy Resolution — read before touching `reverse()`
@@ -140,10 +143,21 @@ Behaviour changes go into `SPEC.md` first, then into each implementation.
 ```bash
 python conformance/run.py                                              # Python
 python conformance/run.py --adapter cmd --cmd "node conformance/adapters/node.mjs"
+cd packages/go && CGO_ENABLED=0 go build -o /tmp/gtc-adapter ./cmd/conformance-adapter
+python conformance/run.py --adapter cmd --cmd /tmp/gtc-adapter
 ```
 
-The Node dataset is a copy: `node packages/node/scripts/sync-data.mjs` after rebuilding
-the `.gtc`. It is gitignored so the 6 MB binary is committed once, not once per language.
+The tree hash is the fiddliest thing to match: `children` must be present (possibly
+empty) on province and city nodes and absent on leaves, and the canonical JSON sorts
+keys, omits spaces and does not escape non-ASCII. See SPEC §1.3.
+
+Each binding's dataset is a copy, gitignored so the 6 MB binary is committed once rather
+than once per language. After rebuilding the `.gtc`:
+
+```bash
+node packages/node/scripts/sync-data.mjs
+bash packages/go/scripts/sync-data.sh
+```
 
 ## Repository
 - **Main branch**: `master`

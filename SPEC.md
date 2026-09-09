@@ -38,7 +38,20 @@
 { "value": "<adcode>", "label": "<name>", "children": [TreeNode, ...] }
 ```
 
-叶子节点（区县）**不含** `children` 键。
+`children` 键的有无必须**严格**按下表，否则 conformance 的树哈希对不上：
+
+| 节点 | `children` |
+|------|-----------|
+| 省级 | **始终存在**，无下级时为 `[]`（台湾省即如此） |
+| 市级 | **始终存在**，无下级时为 `[]` |
+| 区县（叶子） | **不存在**，不是 `[]` 也不是 `null` |
+
+⚠️ 这一条在移植时容易踩：Go 的 `json:"children,omitempty"` 会把空数组一并丢掉，
+使省级节点缺少该键；需要自定义 `MarshalJSON` 区分「nil（叶子）」与「空但非 nil」。
+
+树哈希的计算方式：对整棵树做规范化 JSON 序列化（**键名升序、无空格、不转义非 ASCII**），
+取其 UTF-8 字节的 SHA-256。注意 Go 的 `encoding/json` 默认转义 `<`、`>`、`&`，
+需 `SetEscapeHTML(false)`。
 
 ### 1.4 层级关系
 

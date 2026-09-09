@@ -149,6 +149,8 @@ jobs:
             adapter: ""
           - lang: node
             adapter: "--adapter cmd --cmd 'node conformance/adapters/node.mjs'"
+          - lang: go
+            adapter: "--adapter cmd --cmd /tmp/gtc-adapter"
     steps:
       - uses: actions/checkout@v4
 
@@ -161,11 +163,17 @@ jobs:
         with:
           node-version: "22"
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
       - name: Install
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
           node packages/node/scripts/sync-data.mjs
+          bash packages/go/scripts/sync-data.sh
+          cd packages/go && CGO_ENABLED=0 go build -o /tmp/gtc-adapter ./cmd/conformance-adapter
 
       - name: Conformance (${{ matrix.lang }})
         run: python conformance/run.py ${{ matrix.adapter }}
@@ -193,3 +201,33 @@ jobs:
             echo "::error::@geotoolcn/core should have no dependencies, got: $DEPS"
             exit 1
           fi
+
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Sync the dataset, vet and test
+        working-directory: packages/go
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          bash scripts/sync-data.sh
+          go vet ./...
+          go test ./...
+
+      # No cgo is the point: it is what keeps cross-compilation working, which
+      # the Go ecosystem expects of a library like this.
+      - name: Cross-compile without cgo
+        working-directory: packages/go
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          for target in linux/amd64 linux/arm64 darwin/arm64 windows/amd64; do
+            GOOS=${target%/*} GOARCH=${target#*/} go build ./... || exit 1
+            echo "built $target"
+          done

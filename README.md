@@ -23,9 +23,10 @@
 ```bash
 pip install geotool-cn          # Python
 npm install @geotoolcn/core     # Node.js / TypeScript
+go get github.com/13Cohen/geotoolcn-go   # Go
 ```
 
-两种实现共用同一份数据文件，并通过同一套 35,000+ 条一致性用例。
+三种实现共用同一份数据文件，并通过同一套 35,000+ 条一致性用例。
 跨语言契约见 [SPEC.md](SPEC.md)。
 
 ## 快速上手
