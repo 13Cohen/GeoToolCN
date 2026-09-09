@@ -6,12 +6,9 @@
 FROM golang:1.22-alpine AS build
 WORKDIR /src
 
-# The dataset is not committed per language, so bring it in from the Python
-# package the way the sync script does.
-COPY packages/go/go.mod ./packages/go/
+# packages/go carries its own dataset — go:embed cannot reach outside the
+# module — so the Go module alone is enough to build from.
 COPY packages/go/ ./packages/go/
-COPY GeoToolCN/data/china.full.gtc GeoToolCN/data/china_admin.json ./GeoToolCN/data/
-RUN cp GeoToolCN/data/china.full.gtc GeoToolCN/data/china_admin.json packages/go/data/
 
 WORKDIR /src/packages/go
 # No cgo, so the result runs on scratch with nothing else installed.

@@ -13,5 +13,6 @@ build/
 scripts/*.xlsx
 packages/node/data/
 packages/node/node_modules/
-packages/go/data/*.gtc
-packages/go/data/*.json
+# packages/go/data is committed, not ignored: `go get` fetches source straight
+# from git, and go:embed cannot reach outside the module directory. The Go
+# module is the one binding whose dataset has to live in the repository.

@@ -12,7 +12,7 @@ Offline geocoding toolkit for Chinese administrative regions. Converts GPS coord
 - **Build**: `pyproject.toml` only (setuptools backend, no setup.py)
 - **CI/CD**: `.github/workflows/test.yml` — tests, conformance matrix and dependency
   assertions on push/PR; `.github/workflows/release.yml` — publishes per ecosystem from
-  its own tag prefix (`py-v*`, `npm-v*`, `go-v*`, `cli-v*`)
+  its own tag prefix (`py-v*`, `npm-v*`, `cli-v*`, `packages/go/v*`)
 
 ## Commands
 ```bash
@@ -88,9 +88,12 @@ pip install -e .
   adding an adapter here and a row to the CI matrix
 - `packages/node/` — `@geotoolcn/core`, zero dependencies, ESM. Plain JS with JSDoc plus a
   hand-written `index.d.ts`: no build step, so nothing to keep in sync with the source
-- `packages/go/` — `geotoolcn-go`, no cgo, dataset via `go:embed`. Published from a
-  read-only mirror repo, because a module in a monorepo subdirectory forces the import
-  path `.../GeoToolCN/packages/go` and tags of the form `packages/go/v1.0.0`
+- `packages/go/` — no cgo, dataset via `go:embed`. Imported as
+  `github.com/13Cohen/GeoToolCN/packages/go`, released by tagging `packages/go/v3.0.0`;
+  both shapes are what Go requires of a module in a subdirectory.
+  `packages/go/data/china.full.gtc` is committed — the only duplicated copy in the repo —
+  because `go get` fetches only what git holds and `go:embed` cannot reach outside the
+  module directory
 - `packages/go/cmd/geotoolcn/` — the CLI and HTTP server, covering languages with no
   binding. Go because it produces one static binary with the dataset inside
 - `PORTING.md` — what to implement, which mutations prove the suite covers your code,
@@ -167,8 +170,8 @@ Each binding's dataset is a copy, gitignored so the 6 MB binary is committed onc
 than once per language. After rebuilding the `.gtc`:
 
 ```bash
-node packages/node/scripts/sync-data.mjs
-bash packages/go/scripts/sync-data.sh
+node packages/node/scripts/sync-data.mjs   # gitignored, rebuilt on demand
+bash packages/go/scripts/sync-data.sh      # commit the result: go get needs it in git
 ```
 
 ## Repository

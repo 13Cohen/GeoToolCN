@@ -1,3 +1,3 @@
-module github.com/13Cohen/geotoolcn-go
+module github.com/13Cohen/GeoToolCN/packages/go
 
 go 1.21

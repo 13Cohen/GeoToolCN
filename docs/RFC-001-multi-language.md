@@ -138,7 +138,7 @@ Sections
 |------|-----|---------|---------|
 | **Python** | `geotool-cn` v3 | PyPI，纯 Python（numpy 可选加速） | **移除 geopandas/shapely**，安装体积 ~120MB → ~4MB，冷启动 2s → <100ms |
 | **TS/JS** | `@geotoolcn/core` + `@geotoolcn/data-{mini,lite,full}` | npm，ESM + CJS | 零依赖；Node 18+ / Deno / Bun / 浏览器 / Cloudflare Workers 全覆盖；数据分包按需装 |
-| **Go** | `github.com/13Cohen/geotoolcn-go`（数据独立 module + `go:embed`） | Go module | **纯 Go，无 cgo**，`CGO_ENABLED=0` 可交叉编译 |
+| **Go** | `github.com/13Cohen/GeoToolCN/packages/go`（`go:embed` 内嵌数据） | Go module（git tag） | **纯 Go，无 cgo**，`CGO_ENABLED=0` 可交叉编译 |
 | **Rust** | `geotoolcn` | crates.io | 后续；同时作为可选 WASM 加速包的源 |
 | **Java / Kotlin** | Maven Central | 后续 / 社区 | |
 | **C# / .NET** | NuGet | 后续 / 社区 | |
@@ -288,7 +288,7 @@ GeoToolCN/                          （单一 monorepo）
 ├── packages/
 │   ├── python/    pyproject.toml   → PyPI      geotool-cn
 │   ├── node/      package.json     → npm       @geotoolcn/core
-│   ├── go/        go.mod           → Go module geotoolcn-go
+│   ├── go/        go.mod           → Go module（含 data/，见下）
 │   └── rust/      Cargo.toml       → crates.io geotoolcn （后续）
 └── .github/workflows/
     ├── conformance.yml             每个 PR：矩阵跑全部语言 × 同一套测试集
@@ -307,16 +307,22 @@ GeoToolCN/                          （单一 monorepo）
 |------|------|------|---------|
 | Python | tag `py-v3.0.0` | `python -m build` + `twine upload` | `pip install geotool-cn` |
 | TS/JS | tag `npm-v1.0.0` | `npm publish`（core + data 分包） | `npm install @geotoolcn/core` |
-| Go | tag `go-v1.0.0` | CI 同步到镜像仓库（见下） | `go get github.com/13Cohen/geotoolcn-go` |
+| Go | tag `packages/go/v1.0.0` | 无需发布，proxy 直接解析 tag | `go get github.com/13Cohen/GeoToolCN/packages/go` |
 | Rust | tag `rs-v1.0.0` | `cargo publish` | `cargo add geotoolcn` |
 | 长尾语言 | tag `cli-v1.0.0` | 交叉编译二进制 + 推 GHCR | `docker run ghcr.io/13cohen/geotoolcn serve` |
 
-**⚠️ Go 的特殊处理**：Go module 没有中心化 registry，直接按 git tag 解析。
-monorepo 子目录里的 module 路径会变成 `github.com/13Cohen/GeoToolCN/packages/go`，
-且版本 tag 必须写成 `packages/go/v1.0.0` —— 对用户很难看。
-**对策**：CI 从 monorepo 单向同步到独立镜像仓库 `13Cohen/geotoolcn-go`，
-用户拿到干净的 `go get github.com/13Cohen/geotoolcn-go`。
-（这是 protobuf、googleapis 等项目的通行做法。）源码真源仍在 monorepo，镜像仓库只读。
+**⚠️ Go 的特殊处理**：Go module 没有中心化 registry，`go get` **直接从 git 拉源码**。
+这带来两个后果：
+
+1. 子目录 module 的导入路径必须是 `github.com/13Cohen/GeoToolCN/packages/go`，
+   版本 tag 必须写成 `packages/go/v1.0.0`。
+2. **更关键**：`go:embed` 只能引用模块目录内的文件，且 `go get` 只能拿到 git 里的内容。
+   因此 `packages/go/data/china.full.gtc` **必须提交**，成为仓库里唯一一份重复存放的数据。
+
+> 实现阶段曾配置镜像仓库 `13Cohen/geotoolcn-go`（protobuf、googleapis 的做法），
+> 由 CI 在发布时把数据复制进去，主仓库因此只存一份。**后改为单仓库方案**：
+> 多 6 MB 换掉「一个额外仓库 + 一个可能悄悄失效的同步 job」，更符合本项目
+> 「所有语言同一个仓库」的取向。代价是导入路径较长，以及每次数据更新在历史里多 6 MB。
 
 ### 7.6 数据是怎么进到各个包里的
 

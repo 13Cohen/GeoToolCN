@@ -119,14 +119,22 @@ Go 的 `json:"children,omitempty"` 会把空数组一并丢掉，需要自定义
 
 ## 数据
 
-`.gtc` 不按语言重复提交（6 MB × 语言数会累积）。构建后复制：
+`.gtc` 尽量不按语言重复提交（6 MB × 语言数会累积）。构建后复制：
 
 ```bash
 python pipeline/build_gtc.py            # 需要 geopandas（仅构建期）
 cp GeoToolCN/data/china.full.gtc packages/<你的语言>/data/
 ```
 
-并把它加进 `.gitignore`。
+**是否加进 `.gitignore`，取决于你那个生态怎么分发：**
+
+- **有中心化 registry**（PyPI、npm、crates.io、Maven…）：加进 `.gitignore`。数据在打包时
+  才注入构件，仓库里存一份就够。
+- **直接从 git 解析**（Go）：**必须提交**。`go get` 只能拿到 git 里的内容，`go:embed`
+  也无法引用模块目录之外的文件。`packages/go/data/china.full.gtc` 因此是仓库里唯一
+  一份重复存放的数据。
+
+判断方法：把 `git ls-files packages/<你的语言>` 的内容单独解出来，看能不能构建。
 
 ## 有问题
 

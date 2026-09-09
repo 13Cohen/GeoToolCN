@@ -7,7 +7,14 @@ Go 版 [GeoToolCN](https://github.com/13Cohen/GeoToolCN) 实现，与 Python、N
 ## 安装
 
 ```bash
-go get github.com/13Cohen/geotoolcn-go
+go get github.com/13Cohen/GeoToolCN/packages/go
+```
+
+导入路径带 `packages/go` 是因为本模块位于 monorepo 子目录 —— Go module 从 git 直接解析，
+路径即仓库路径。包名仍是 `geotoolcn`：
+
+```go
+import geotoolcn "github.com/13Cohen/GeoToolCN/packages/go"
 ```
 
 ## 使用
@@ -18,7 +25,7 @@ package main
 import (
     "fmt"
 
-    geotoolcn "github.com/13Cohen/geotoolcn-go"
+    geotoolcn "github.com/13Cohen/GeoToolCN/packages/go"
 )
 
 func main() {
@@ -84,6 +91,18 @@ GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build ./...
 ## 一致性
 
 本实现通过与 Python、Node 实现**完全相同**的 35,000+ 条一致性用例，包括同一个行政区划树哈希。契约见 [`SPEC.md`](https://github.com/13Cohen/GeoToolCN/blob/master/SPEC.md)。
+
+## 版本
+
+发布即打 tag，无需上传任何 registry —— Go proxy 直接解析 git tag。子目录 module 的 tag
+形式由 Go 规定：
+
+```
+packages/go/v3.0.0
+```
+
+数据文件 `data/china.full.gtc` **随仓库提交**，因为 `go get` 只能拿到 git 里的内容，
+而 `go:embed` 无法引用模块目录之外的文件。这也是本仓库唯一一份重复存放的数据。
 
 ## 数据来源
 

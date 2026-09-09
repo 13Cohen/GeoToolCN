@@ -23,7 +23,7 @@
 ```bash
 pip install geotool-cn          # Python
 npm install @geotoolcn/core     # Node.js / TypeScript
-go get github.com/13Cohen/geotoolcn-go   # Go
+go get github.com/13Cohen/GeoToolCN/packages/go   # Go
 ```
 
 其他语言可用 CLI 或 HTTP 服务：

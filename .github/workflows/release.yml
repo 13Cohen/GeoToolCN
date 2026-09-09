@@ -5,9 +5,11 @@ on:
     tags:
       - "py-v*"
       - "npm-v*"
-      - "go-v*"
       - "cli-v*"
       - "data-*"
+      # Go needs no publish job: `go get` resolves straight from git tags. The
+      # tag shape is dictated by the module living in a subdirectory.
+      - "packages/go/v*"
   workflow_dispatch:
 
 # Each ecosystem publishes from its own tag prefix, so a Python release does not
@@ -54,32 +56,38 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-  go-mirror:
-    # Go modules resolve straight from git tags, and a module in a monorepo
-    # subdirectory would force the import path .../GeoToolCN/packages/go with
-    # tags shaped packages/go/v1.0.0. Pushing to a read-only mirror keeps
-    # `go get github.com/13Cohen/geotoolcn-go` clean.
-    if: startsWith(github.ref_name, 'go-v')
+  go:
+    # There is nothing to publish — the proxy serves whatever the tag points at.
+    # So the tag itself is the release, and this verifies it is not broken:
+    # `go get` fetches only what git holds, and go:embed cannot reach outside
+    # the module, which is why packages/go/data is committed rather than synced.
+    if: startsWith(github.ref_name, 'packages/go/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Push packages/go to the mirror repository
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Build from only what git tracks
         env:
-          MIRROR_TOKEN: ${{ secrets.GO_MIRROR_TOKEN }}
+          CGO_ENABLED: "0"
+        run: |
+          mkdir -p /tmp/asgit
+          git ls-files packages/go | tar -cf - -T - | tar -x -C /tmp/asgit
+          cd /tmp/asgit/packages/go
+          test -f data/china.full.gtc || {
+            echo "::error::data/china.full.gtc is not committed — go get would fail to build"
+            exit 1
+          }
+          go build ./...
+          go test ./...
+
+      - name: Report the module path users will import
+        env:
           REF_NAME: ${{ github.ref_name }}
         run: |
-          VERSION="${REF_NAME#go-}"
-          bash packages/go/scripts/sync-data.sh
-          git config --global user.name "geotoolcn-bot"
-          git config --global user.email "noreply@github.com"
-          rm -rf /tmp/mirror && mkdir /tmp/mirror
-          cp -r packages/go/. /tmp/mirror/
-          cp LICENSE SPEC.md /tmp/mirror/
-          cd /tmp/mirror
-          git init -q && git add -A
-          git commit -q -m "Release $VERSION"
-          git tag "$VERSION"
-          git push --force "https://x-access-token:${MIRROR_TOKEN}@github.com/13Cohen/geotoolcn-go.git" HEAD:master --tags
+          echo "go get github.com/13Cohen/GeoToolCN/packages/go@${REF_NAME#packages/go/}"
 
   cli:
     if: startsWith(github.ref_name, 'cli-v')
