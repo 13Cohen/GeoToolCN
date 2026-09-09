@@ -53,3 +53,36 @@ jobs:
       # structural regressions introduced by a DataV refresh.
       - name: Validate bundled data
         run: python scripts/validate_data.py
+
+  conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      # The contract every port is held to. Failures here mean either a
+      # regression or an entry missing from conformance/known-divergences.yaml.
+      - name: Run conformance suite
+        run: python conformance/run.py
+
+      # The suite is generated from this implementation, so it must reproduce
+      # byte-for-byte. A diff means the implementation changed without the
+      # golden set being regenerated and reviewed.
+      - name: Check the suite is up to date
+        run: |
+          python conformance/generate.py
+          if ! git diff --quiet -- conformance/; then
+            echo "::error::conformance 数据集与当前实现不一致。"
+            echo "请运行 python conformance/generate.py，审阅 diff 后提交。"
+            git diff --stat -- conformance/
+            exit 1
+          fi

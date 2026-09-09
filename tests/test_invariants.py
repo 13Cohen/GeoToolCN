@@ -45,8 +45,16 @@ RANDOM_SAMPLE = 2000
 COORD_SAMPLE = 10000
 BATCH_SAMPLE = 500
 
-# Maximum acceptable round-trip error for coordinate conversions, in metres.
-COORD_ROUNDTRIP_TOLERANCE_M = 1.0
+# Maximum acceptable round-trip error per conversion pair, in metres.
+# gcj02_to_wgs84 is a single-step subtraction, not an iterative inverse, so its
+# round trip is inherently lossy: measured median 0.64 m, p99 3.2 m, max 4.75 m
+# over 20k points.  The bd09 pair has a near-exact inverse and stays under 0.25 m.
+# These bound the published algorithm; tightening them means changing it.
+COORD_ROUNDTRIP_TOLERANCE_M = {
+    "wgs84<->gcj02": 6.0,
+    "gcj02<->bd09": 0.5,
+    "wgs84<->bd09": 6.0,
+}
 
 _MAX_REPORTED = 15
 
@@ -325,10 +333,14 @@ class TestCoordInvariants:
         points = _random_points(COORD_SAMPLE, seed=8)
         for label, forward, backward in pairs:
             for lat, lng in points:
-                f_lat, f_lng = forward(lat, lng)
-                b_lat, b_lng = backward(f_lat, f_lng)
+                # These take (lng, lat).  Feeding them (lat, lng) makes the test
+                # vacuous rather than failing: the swapped longitude lands outside
+                # the China bounding box, so the value is returned untouched and
+                # every round-trip is trivially exact.
+                f_lng, f_lat = forward(lng, lat)
+                b_lng, b_lat = backward(f_lng, f_lat)
                 error_m = distance(lat, lng, b_lat, b_lng) * 1000
-                if error_m > COORD_ROUNDTRIP_TOLERANCE_M or math.isnan(error_m):
+                if error_m > COORD_ROUNDTRIP_TOLERANCE_M[label] or math.isnan(error_m):
                     violations.append(f"{label} at ({lat:.5f},{lng:.5f}): {error_m:.3f} m")
         _fail(violations, COORD_SAMPLE * len(pairs), "INV-08 conversion round-trip")
 
@@ -337,8 +349,8 @@ class TestCoordInvariants:
         violations = []
         outside = [(35.6762, 139.6503), (40.7128, -74.0060), (-33.8688, 151.2093)]
         for lat, lng in outside:
-            got_lat, got_lng = wgs84_to_gcj02(lat, lng)
-            if (got_lat, got_lng) != (lat, lng):
+            got_lng, got_lat = wgs84_to_gcj02(lng, lat)
+            if (got_lng, got_lat) != (lng, lat):
                 violations.append(f"({lat},{lng}) -> ({got_lat},{got_lng})")
         _fail(violations, len(outside), "INV-08b out-of-China pass-through")
 
@@ -361,6 +373,25 @@ class TestTreeInvariants:
         violations = [f"only in tree: {c}" for c in sorted(leaves - listed)]
         violations += [f"only in district layer: {c}" for c in sorted(listed - leaves)]
         _fail(violations, len(listed | leaves), "INV-09 tree/district agreement")
+
+    def test_inv09b_each_district_appears_once(self) -> None:
+        """INV-09b: no district is reachable by two different paths.
+
+        Comparing code *sets* (INV-09) misses duplication entirely — it passed
+        while every one of 海南's 15 county-level cities was listed under each
+        of the other 14, inflating the tree from 2874 leaves to 3186.
+        """
+        occurrences: dict[str, list[str]] = {}
+        for province in get_administrative_tree():
+            for city in province["children"]:
+                for district in city.get("children", []):
+                    occurrences.setdefault(district["value"], []).append(city["value"])
+        violations = [
+            f"{code} appears under {len(parents)} cities: {sorted(parents)[:5]}"
+            for code, parents in sorted(occurrences.items())
+            if len(parents) > 1
+        ]
+        _fail(violations, len(occurrences), "INV-09b district appears once")
 
     def test_inv10_reverse_path_exists_in_tree(
         self, geo: GeoTool, regions: dict[str, list]

@@ -8,6 +8,9 @@ import geopandas as gpd
 import pandas as pd
 from shapely.geometry import Point
 
+from ._hierarchy import MERGED_PREFIXES as _MERGED_PREFIXES
+from ._hierarchy import parent_city_code
+
 _LEVELS = ("province", "city", "district")
 _FILES = {
     "province": "china_province.geojson",
@@ -15,10 +18,6 @@ _FILES = {
     "district": "china_district.geojson",
 }
 _DEFAULT_DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
-
-# Municipalities (直辖市) and SARs (特别行政区) that have no city-level
-# subdivision — districts sit directly under the province.
-_MERGED_PREFIXES = frozenset({"11", "12", "31", "50", "81", "82"})
 
 
 @dataclass
@@ -95,24 +94,14 @@ class GeoTool:
     def _build_parent_index(self) -> None:
         """Map every district adcode to its parent city adcode.
 
-        The obvious ``adcode[:4] + "00"`` rule is wrong for the 30 province-
-        directly-governed county-level divisions (省直辖县级行政区) in adcode
-        blocks 4190 (济源), 4290 (仙桃/潜江/天门/神农架), 4690 (海南) and 6590
-        (新疆): it produces codes such as ``419000`` that name no real division.
-        Those divisions instead appear in the city layer under their own code,
-        so the lookup falls back to that.
+        Shares :func:`parent_city_code` with ``admin_tree`` so the reverse
+        chain and the administrative tree cannot disagree about parentage.
         """
         city_codes = self._levels["city"].code_index
         for code in self._levels["district"].code_index:
-            prefix2 = code[:2]
-            if prefix2 in _MERGED_PREFIXES:
-                self._parent_city[code] = prefix2 + "0000"
-                continue
-            by_prefix = code[:4] + "00"
-            if by_prefix in city_codes:
-                self._parent_city[code] = by_prefix
-            elif code in city_codes:
-                self._parent_city[code] = code
+            parent = parent_city_code(code, city_codes)
+            if parent is not None:
+                self._parent_city[code] = parent
 
     def _hierarchy_from_district(self, district: Region) -> ReverseResult:
         """Build the full province/city/district chain from a resolved district.
@@ -301,6 +290,7 @@ class GeoTool:
         if city is not None:
             results = self._filter_by_parent(results, "city", city)
 
+        results.sort(key=lambda r: (_LEVELS.index(r.level), r.code))
         return results
 
     # ------------------------------------------------------------------
@@ -318,16 +308,21 @@ class GeoTool:
         Returns
         -------
         list[Region]
+            Sorted by adcode ascending.  The source file order is *almost*
+            sorted already — 330114 precedes 330113 — so relying on it would
+            hand every future port a quirk to reproduce.
         """
         if level not in _LEVELS:
             raise ValueError(
                 f"Invalid level {level!r}. Must be one of {_LEVELS}"
             )
         ld = self._levels[level]
-        return [
+        regions = [
             self._row_to_region(ld.gdf.iloc[i], level)
             for i in range(len(ld.gdf))
         ]
+        regions.sort(key=lambda r: r.code)
+        return regions
 
     def get_region(self, code: str) -> Region | None:
         """Get a single region by its adcode.

@@ -26,6 +26,10 @@ pytest tests/test_invariants.py
 # Validate bundled data
 python scripts/validate_data.py
 
+# Conformance suite (regenerate only after an intentional behaviour change)
+python conformance/run.py
+python conformance/generate.py
+
 # Update bundled data (fetches from DataV API, converts GCJ-02→WGS-84)
 python scripts/fetch_datav_geojson.py
 
@@ -40,6 +44,8 @@ pip install -e .
 - `GeoToolCN/__init__.py` — Public API exports + module-level convenience functions (lazy singleton)
 - `GeoToolCN/core.py` — Core implementation: `GeoTool`, `Region`, `ReverseResult` classes
 - `GeoToolCN/admin_tree.py` — Administrative tree builder (zero geopandas dependency)
+- `GeoToolCN/_hierarchy.py` — Parent/merged-prefix rules shared by `core` and `admin_tree`,
+  stdlib-only so the tree builder stays free of geopandas
 - `GeoToolCN/data/*.geojson` — Bundled GeoJSON files (province/city/district boundaries)
 - `GeoToolCN/data/china_admin.json` — Lightweight admin division data for tree builder
 - `GeoToolCN/data/DATA_VERSION.json` — Data version metadata (source, date, counts)
@@ -50,6 +56,11 @@ pip install -e .
 - `tests/test_invariants.py` — structural invariants (INV-01..12); asserts properties that
   must hold for *every* region, so one test yields thousands of assertions
 - `scripts/validate_data.py` — 10 categories of bundled-data checks; run in CI
+- `SPEC.md` — the cross-language contract: API semantics, tie-breaking rules, GTC binary
+  format. Behaviour changes go here first, then into the implementation
+- `conformance/` — language-neutral golden suite (~35k cases). `generate.py` rebuilds it
+  from this implementation, `run.py` checks any implementation against it via a
+  line-protocol adapter, `known-divergences.yaml` lists the differences that are allowed
 - `DATA_UPDATE_REPORT.md` — Auto-generated report from last data update
 
 ### Hierarchy Resolution — read before touching `reverse()`

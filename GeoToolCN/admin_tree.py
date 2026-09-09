@@ -13,11 +13,9 @@ import json
 import os
 from typing import Any
 
-_DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "china_admin.json")
+from ._hierarchy import MERGED_PREFIXES, parent_city_code
 
-# Municipalities (直辖市) and SARs (特别行政区):
-# Their city-level node uses the province code as its value.
-_MERGED_PREFIXES = frozenset({"11", "12", "31", "50", "81", "82"})
+_DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "china_admin.json")
 
 _cached_tree: list[dict[str, Any]] | None = None
 
@@ -28,8 +26,17 @@ def _build_tree() -> list[dict[str, Any]]:
 
     provinces = {code: name for code, name in raw["provinces"]}
     cities_by_2 = _group_by_prefix(raw["cities"], 2)
-    dists_by_2 = _group_by_prefix(raw["districts"], 2)
-    dists_by_4 = _group_by_prefix(raw["districts"], 4)
+
+    # Attach each district to the city the hierarchy rules name as its parent.
+    # Grouping by 4-digit prefix instead would place every province-directly-
+    # governed county-level division under all of its siblings, since they
+    # share one prefix — 海南's 15 such cities each listed the other 14.
+    city_codes = {code for code, _ in raw["cities"]}
+    dists_by_parent: dict[str, list[tuple[str, str]]] = {}
+    for code, name in raw["districts"]:
+        parent = parent_city_code(code, city_codes)
+        if parent is not None:
+            dists_by_parent.setdefault(parent, []).append((code, name))
 
     tree: list[dict[str, Any]] = []
 
@@ -41,14 +48,14 @@ def _build_tree() -> list[dict[str, Any]]:
             "children": [],
         }
 
-        if prefix2 in _MERGED_PREFIXES:
+        if prefix2 in MERGED_PREFIXES:
             # Municipality / SAR: single city node, value = province code
             city_node: dict[str, Any] = {
                 "value": prov_code,
                 "label": provinces[prov_code],
                 "children": [
                     {"value": code, "label": name}
-                    for code, name in sorted(dists_by_2.get(prefix2, []))
+                    for code, name in sorted(dists_by_parent.get(prov_code, []))
                 ],
             }
             prov_node["children"].append(city_node)
@@ -60,9 +67,7 @@ def _build_tree() -> list[dict[str, Any]]:
                     "label": city_name,
                     "children": [
                         {"value": code, "label": name}
-                        for code, name in sorted(
-                            dists_by_4.get(city_code[:4], [])
-                        )
+                        for code, name in sorted(dists_by_parent.get(city_code, []))
                     ],
                 }
                 prov_node["children"].append(city_node)
