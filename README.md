@@ -26,8 +26,18 @@ npm install @geotoolcn/core     # Node.js / TypeScript
 go get github.com/13Cohen/geotoolcn-go   # Go
 ```
 
+其他语言可用 CLI 或 HTTP 服务：
+
+```bash
+docker run --rm -p 8080:8080 ghcr.io/13cohen/geotoolcn
+curl 'localhost:8080/reverse?lat=39.9042&lng=116.4074'
+
+# 或下载单文件二进制，无需运行时
+geotoolcn reverse 39.9042 116.4074 | jq -r .district.name
+```
+
 三种实现共用同一份数据文件，并通过同一套 35,000+ 条一致性用例。
-跨语言契约见 [SPEC.md](SPEC.md)。
+跨语言契约见 [SPEC.md](SPEC.md)，移植指南见 [PORTING.md](PORTING.md)。
 
 ## 快速上手
 

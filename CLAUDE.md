@@ -10,8 +10,9 @@ Offline geocoding toolkit for Chinese administrative regions. Converts GPS coord
 - **Package**: `GeoToolCN/` (source), published as `geotool-cn`
 - **Tests**: `tests/test_geotool.py` — run with `pytest`
 - **Build**: `pyproject.toml` only (setuptools backend, no setup.py)
-- **CI/CD**: `.github/workflows/test.yml` — pytest matrix (3.9–3.12) + data validation on push/PR;
-  `.github/workflows/publish.yml` — auto-publish to PyPI on GitHub release
+- **CI/CD**: `.github/workflows/test.yml` — tests, conformance matrix and dependency
+  assertions on push/PR; `.github/workflows/release.yml` — publishes per ecosystem from
+  its own tag prefix (`py-v*`, `npm-v*`, `go-v*`, `cli-v*`)
 
 ## Commands
 ```bash
@@ -83,6 +84,10 @@ pip install -e .
 - `packages/go/` — `geotoolcn-go`, no cgo, dataset via `go:embed`. Published from a
   read-only mirror repo, because a module in a monorepo subdirectory forces the import
   path `.../GeoToolCN/packages/go` and tags of the form `packages/go/v1.0.0`
+- `packages/go/cmd/geotoolcn/` — the CLI and HTTP server, covering languages with no
+  binding. Go because it produces one static binary with the dataset inside
+- `PORTING.md` — what to implement, which mutations prove the suite covers your code,
+  and the checklist for getting a port merged
 - `DATA_UPDATE_REPORT.md` — Auto-generated report from last data update
 
 ### Hierarchy Resolution — read before touching `reverse()`
