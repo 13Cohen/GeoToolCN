@@ -11,3 +11,5 @@ build/
 .mypy_cache/
 .DS_Store
 scripts/*.xlsx
+packages/node/data/
+packages/node/node_modules/

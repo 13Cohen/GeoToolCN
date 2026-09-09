@@ -226,6 +226,21 @@ def main() -> None:
 
     # Ambiguous names, parent disambiguation, and the island case that the old
     # geometry-based filter dropped.
+    # Substrings taken from the middle of names. Without these the fuzzy path is
+    # barely exercised: nearly every case above matches exactly, so swapping
+    # `contains` for `startswith` changed exactly one expected result.
+    fuzzy_seen: set[str] = set()
+    for r in rng.sample(districts, 250):
+        if len(r.name) >= 3:
+            fragment = r.name[1:3]
+            if fragment not in fuzzy_seen:
+                fuzzy_seen.add(fragment)
+                add_search(fragment, ["fuzzy", "infix"], level="district")
+    for fragment in ["阳区", "自治县", "尔族", "新区", "开发区", "林区", "群岛", "特别"]:
+        if fragment not in fuzzy_seen:
+            fuzzy_seen.add(fragment)
+            add_search(fragment, ["fuzzy", "infix", "pinned"])
+
     for query, kwargs, tags in [
         ("朝阳区", {"level": "district"}, ["ambiguous"]),
         ("朝阳区", {"province": "北京市"}, ["parent-filter", "by-name"]),

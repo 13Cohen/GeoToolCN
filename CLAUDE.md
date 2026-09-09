@@ -76,6 +76,10 @@ pip install -e .
 - `conformance/` — language-neutral golden suite (~35k cases). `generate.py` rebuilds it
   from this implementation, `run.py` checks any implementation against it via a
   line-protocol adapter, `known-divergences.yaml` lists the differences that are allowed
+- `conformance/adapters/` — one file per language binding; adding a language means
+  adding an adapter here and a row to the CI matrix
+- `packages/node/` — `@geotoolcn/core`, zero dependencies, ESM. Plain JS with JSDoc plus a
+  hand-written `index.d.ts`: no build step, so nothing to keep in sync with the source
 - `DATA_UPDATE_REPORT.md` — Auto-generated report from last data update
 
 ### Hierarchy Resolution — read before touching `reverse()`
@@ -128,6 +132,18 @@ All data (GeoJSON boundaries + admin tree) comes from a **single source**: DataV
 2. Review generated `DATA_UPDATE_REPORT.md` for changes
 3. Run `pytest` to verify nothing broke
 4. Commit the updated data files
+
+## Ports
+Every implementation reads the same `.gtc` and is held to the same conformance suite.
+Behaviour changes go into `SPEC.md` first, then into each implementation.
+
+```bash
+python conformance/run.py                                              # Python
+python conformance/run.py --adapter cmd --cmd "node conformance/adapters/node.mjs"
+```
+
+The Node dataset is a copy: `node packages/node/scripts/sync-data.mjs` after rebuilding
+the `.gtc`. It is gitignored so the 6 MB binary is committed once, not once per language.
 
 ## Repository
 - **Main branch**: `master`

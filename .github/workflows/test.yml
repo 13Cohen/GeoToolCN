@@ -136,3 +136,60 @@ jobs:
           print(f"installed: {total / 1048576:.2f} MB")
           assert total < 8 * 1048576, "package grew beyond 8 MB"
           PY
+
+  # L4: every implementation is checked against one suite. Adding a language
+  # means adding a row here and an adapter under conformance/adapters/.
+  conformance-matrix:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lang: python
+            adapter: ""
+          - lang: node
+            adapter: "--adapter cmd --cmd 'node conformance/adapters/node.mjs'"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+          node packages/node/scripts/sync-data.mjs
+
+      - name: Conformance (${{ matrix.lang }})
+        run: python conformance/run.py ${{ matrix.adapter }}
+
+  node:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Sync the dataset and test
+        working-directory: packages/node
+        run: |
+          node scripts/sync-data.mjs
+          node --test
+
+      # The Node package must stay dependency-free too.
+      - name: Assert no dependencies
+        run: |
+          DEPS=$(node -p "Object.keys(require('./packages/node/package.json').dependencies||{}).join(',')")
+          if [ -n "$DEPS" ]; then
+            echo "::error::@geotoolcn/core should have no dependencies, got: $DEPS"
+            exit 1
+          fi
