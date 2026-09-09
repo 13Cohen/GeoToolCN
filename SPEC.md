@@ -1,6 +1,9 @@
 # GeoToolCN 规范 v1
 
 > 格式版本 `format_version = 1` · 状态：草案 · 最后更新：2026-09-09
+>
+> [English](SPEC_EN.md) — 本文（中文）为**规范正本**；两者不一致时以本文为准。
+> `scripts/check_translations.py` 会在本文变更而译文未同步时让 CI 失败。
 
 本文件是 GeoToolCN 各语言实现的**唯一真源**。任何实现只要满足本规范，就能通过
 `conformance/` 全套测试；反之，conformance 中出现的任何分歧都应回到本文件澄清，
@@ -341,16 +344,20 @@ for i in 0..n-1:
 | 8 | 8 | `offset`，自文件起始的字节偏移 |
 | 16 | 8 | `length`，字节长度 |
 
-| `type` | 节 |
-|--------|-----|
-| 1 | `META` |
-| 2 | `NAMES` |
-| 3 | `GEOM` |
-| 4 | `GEOM_INDEX` |
-| 5 | `GRID_SOLID` |
-| 6 | `GRID_MIXED_CELLS` |
-| 7 | `GRID_MIXED_PTRS` |
-| 8 | `GRID_MIXED_LISTS` |
+| `type` | 节 | 说明 |
+|--------|-----|------|
+| 1 | `META` | 区划元数据 |
+| 2 | `NAMES` | UTF-8 字符串池 |
+| 3 | `GEOM` | 量化几何 |
+| 4 | `GEOM_INDEX` | 几何偏移表 |
+| 5 | `GRID_SOLID` | **区县**网格：实心格行程 |
+| 6 | `GRID_MIXED_CELLS` | 区县网格：混合格 cell_id |
+| 7 | `GRID_MIXED_PTRS` | 区县网格：候选切分指针 |
+| 8 | `GRID_MIXED_LISTS` | 区县网格：候选列表 |
+| 9 | `GRID_PROV_SOLID` | **省级**网格，结构同 5–8 |
+| 10 | `GRID_PROV_MIXED_CELLS` | |
+| 11 | `GRID_PROV_MIXED_PTRS` | |
+| 12 | `GRID_PROV_MIXED_LISTS` | |
 
 节按 `type` 升序排列，`offset` 8 字节对齐，允许填充。
 
@@ -408,8 +415,13 @@ row = floor((lat - grid_origin_lat / 1e6) / (grid_step / 1e6))
 cell_id = row * grid_width + col
 ```
 
-网格分省级与区县级两套，各自独立的 `GRID_*` 节（通过 `type` 区分的
-实现细节由构建端与运行端约定；本版本 `GRID_*` 仅描述区县级，省级网格为可选优化）。
+网格分**区县级（节 5–8）与省级（节 9–12）两套**，结构完全相同。
+
+省级网格**不是可选优化**：台湾省只有省级边界数据，若所有包含判定都走区县网格，
+全岛都会被判为境外；沿海区县之间的缝隙同样需要它兜底。§2.1 第 2 步与 §2.8、§2.9
+的省级判定都依赖它。实现阶段漏掉这套网格，被 `INV-04`（区划必须包含自己的代表点）抓到。
+
+`lite` / `full` 两档都必须包含全部 12 个节；`mini` 档的几何与网格相关节长度为 0。
 
 **`GRID_SOLID`** —— 完全落在单个区划内的格子，行程编码：
 

@@ -181,3 +181,9 @@ geo = GeoTool(data_dir="/path/to/data")
 ## License
 
 MIT
+
+## Porting to another language
+
+The cross-language contract is [`SPEC_EN.md`](SPEC_EN.md); the porting guide is
+[`PORTING_EN.md`](PORTING_EN.md). Every implementation is held to the same
+35,000+ conformance cases.

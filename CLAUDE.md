@@ -98,6 +98,11 @@ pip install -e .
   binding. Go because it produces one static binary with the dataset inside
 - `PORTING.md` — what to implement, which mutations prove the suite covers your code,
   and the checklist for getting a port merged
+- `SPEC_EN.md` / `PORTING_EN.md` — English translations for contributors who do not read
+  Chinese. The Chinese originals are normative; each translation records the SHA-256 of
+  the source it was written from and `scripts/check_translations.py` fails CI when they
+  drift. After editing a source: update the translation, then run that script with
+  `--update`
 - `DATA_UPDATE_REPORT.md` — Auto-generated report from last data update
 
 ### Hierarchy Resolution — read before touching `reverse()`

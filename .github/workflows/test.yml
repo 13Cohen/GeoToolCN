@@ -56,6 +56,11 @@ jobs:
       - name: Check line endings
         run: python scripts/check_line_endings.py
 
+      # Two copies of a spec that can disagree are worse than one. Each
+      # translation records the hash of the source it was written from.
+      - name: Check translations are in sync
+        run: python scripts/check_translations.py
+
       # L0 (RFC-002): checks the built artifact, not its behaviour. Conformance
       # only reaches a file that loads at all.
       - name: Validate the shipped dataset
