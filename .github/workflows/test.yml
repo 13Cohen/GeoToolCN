@@ -206,6 +206,11 @@ jobs:
         include:
           - lang: python
             adapter: ""
+          # The out-of-process adapter is what scripts/verify_published.py drives
+          # after a release. Exercised here too, or it would rot unnoticed until
+          # a publish had already happened.
+          - lang: python-adapter
+            adapter: "--adapter cmd --cmd 'python conformance/adapters/python.py'"
           - lang: node
             adapter: "--adapter cmd --cmd 'node conformance/adapters/node.mjs'"
           - lang: go

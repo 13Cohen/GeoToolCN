@@ -8,7 +8,14 @@
 import { createHash } from "node:crypto";
 import { createInterface } from "node:readline";
 
-import {
+// Which copy of the implementation to exercise. The working tree by default;
+// scripts/verify_published.py sets this to the bare package name so the same
+// suite runs against whatever npm actually serves. A published tarball can
+// differ from the tree it was built from — packages/node/data is gitignored,
+// so it reaches users only if `files` and the publish step agree about it.
+const MODULE = process.env.GEOTOOLCN_MODULE ?? "../../packages/node/src/index.js";
+
+const {
   GeoTool,
   bd09ToGcj02,
   bd09ToWgs84,
@@ -18,7 +25,7 @@ import {
   getAdministrativeTree,
   wgs84ToBd09,
   wgs84ToGcj02,
-} from "../../packages/node/src/index.js";
+} = await import(MODULE);
 
 const geo = new GeoTool();
 

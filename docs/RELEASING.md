@@ -44,3 +44,35 @@ npm 的 Granular Access Token **只要带写权限，最长就是 90 天**（默
 第一次 `npm-v*` 成功之后就应该切过去。
 
 PyPI 同理（`release.yml` 里已写明为什么现在显式传 token 而非用 OIDC）。
+
+## 发布后验证
+
+`test.yml` 里的 12 项检查全部作用于工作副本。发布不是拷贝 —— 它从 tag 重写版本号、套用
+`files` 白名单、并且只能取到 git 里有的东西。所以包可能以任何一种在发布前不可见的方式损坏：
+
+- `3.0.0rc1` 通过了全部 12 项检查，装下来却报告自己是 `2.1.0`
+- `packages/node/data` 是 gitignored 的，它能否到达用户，取决于发布步骤和 `files` 白名单是否
+  达成一致 —— 一个全新 clone 可以通过 CI，而 tarball 里的包加载不了自己的数据集
+- `go get` 只取 git 里有的东西，`go:embed` 又够不到 module 目录之外，这正是
+  `packages/go/data` 必须提交的全部原因
+
+```bash
+python scripts/verify_published.py                          # 全部生态，registry 上的 latest
+python scripts/verify_published.py --only node
+python scripts/verify_published.py --only python --version 3.0.0rc1
+```
+
+它从各自的包仓库安装，然后对**装下来的东西**跑那 35,086 条 conformance。每一项检查都会先断言
+被测产物解析到仓库目录之外 —— 否则它不过是换个方式再测一遍源码。
+
+自动运行的三个时机（`.github/workflows/post-release.yml`）：
+
+| 时机 | 作用 |
+|------|------|
+| `release.yml` 发布后自动调用 | 验证刚发出去的那个版本，`wait: 300` 覆盖 registry 索引延迟 |
+| 每日定时 | 包可以在没有任何提交的情况下坏掉：版本被 yank、token 静默失效、tarball 被截断 |
+| workflow_dispatch | 手动指定生态与版本 |
+
+⚠️ 新增语言时，它的 conformance adapter 必须能指向**已安装的包**，而不是写死源码路径。
+Node 适配器读 `GEOTOOLCN_MODULE` 环境变量；`conformance/adapters/python.py` 之所以存在，
+就是因为 `run.py --adapter python` 会把仓库根插进 `sys.path`，永远测不到已安装的版本。
