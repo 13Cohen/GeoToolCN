@@ -45,6 +45,10 @@ python pipeline/build_gtc.py --dataset lite --out /tmp/china.lite.gtc
 # Guard README's CRLF endings against script-driven edits
 python scripts/check_line_endings.py
 
+# Check what the registries actually serve (runs after a release, not before)
+python scripts/verify_published.py                        # every ecosystem, latest
+python scripts/verify_published.py --only python --version 3.0.0rc1
+
 # Update bundled data (fetches from DataV API, converts GCJ-02→WGS-84)
 python scripts/fetch_datav_geojson.py
 
@@ -103,6 +107,18 @@ pip install -e .
   the source it was written from and `scripts/check_translations.py` fails CI when they
   drift. After editing a source: update the translation, then run that script with
   `--update`
+- `scripts/verify_published.py` — installs each ecosystem from its registry and runs
+  the conformance suite against *that*, not against the working tree. Every other test
+  here measures the source; publishing rewrites the version, applies a `files` whitelist
+  and reaches only what git tracks, so it can ship something the tree never had. Each
+  check asserts the artifact resolves outside the repository, or it would silently be
+  re-testing the source again
+- `.github/workflows/post-release.yml` — runs that script: called by `release.yml` after
+  a publish, on a daily schedule (a package can break with no commit — a yank, a
+  truncated tarball), and manually via workflow_dispatch
+- `conformance/adapters/python.py` — needed because `run.py --adapter python` inserts the
+  repository root into `sys.path` and therefore always tests the working tree. This one
+  imports normally, so it tests whatever is installed
 - `docs/RELEASING.md` — which tag publishes what, and the credentials each needs.
   Records that NPM_TOKEN expires 2026-12-09: npm caps write tokens at 90 days, so
   the npm job fails alone while the other three ecosystems keep working

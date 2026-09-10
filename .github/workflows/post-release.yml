@@ -1,0 +1,101 @@
+name: Post-release
+
+# Everything in test.yml runs against the working tree. Publishing is not a
+# copy — it rewrites the version from the tag, applies a `files` whitelist, and
+# reaches only what git tracks — so a package can be broken in ways no
+# pre-release check can see. 3.0.0rc1 passed all twelve of them and then
+# reported itself as 2.1.0 once installed.
+#
+# This installs each ecosystem the way a user does, then runs the same 35k
+# conformance suite against it.
+
+on:
+  # Called by release.yml right after a publish, with the version it just cut.
+  workflow_call:
+    inputs:
+      ecosystems:
+        type: string
+        required: true
+      version:
+        type: string
+        required: false
+      wait:
+        type: number
+        default: 300
+
+  workflow_dispatch:
+    inputs:
+      ecosystems:
+        description: "Comma-separated: python,node,go,cli — or all"
+        default: all
+      version:
+        description: "Version to verify (blank = whatever the registry serves as latest)"
+        required: false
+
+  # Nothing here depends on this repository's code, so it can break without a
+  # commit: a yanked version, an expired token that silently published nothing,
+  # a registry serving a truncated tarball. A daily run notices.
+  schedule:
+    - cron: "17 5 * * *"
+
+concurrency:
+  group: post-release-${{ inputs.version || 'latest' }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        ecosystem: [python, node, go, cli]
+    steps:
+      - name: Is this ecosystem in scope?
+        id: scope
+        env:
+          REQUESTED: ${{ inputs.ecosystems || 'all' }}
+          ECOSYSTEM: ${{ matrix.ecosystem }}
+        run: |
+          if [ "$REQUESTED" = "all" ] || echo ",$REQUESTED," | grep -q ",$ECOSYSTEM,"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::$ECOSYSTEM not requested ($REQUESTED), skipping"
+          fi
+
+      # The checkout supplies the conformance cases and the adapters. It must
+      # not supply the implementation — verify_published.py asserts that every
+      # artifact it loads resolves outside this directory.
+      - uses: actions/checkout@v4
+        if: steps.scope.outputs.run == 'true'
+
+      - uses: actions/setup-python@v5
+        if: steps.scope.outputs.run == 'true'
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        if: steps.scope.outputs.run == 'true' && matrix.ecosystem == 'node'
+        with:
+          node-version: "22"
+
+      - uses: actions/setup-go@v5
+        if: steps.scope.outputs.run == 'true' && matrix.ecosystem == 'go'
+        with:
+          go-version: "1.22"
+
+      - name: Verify the published ${{ matrix.ecosystem }} package
+        if: steps.scope.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ECOSYSTEM: ${{ matrix.ecosystem }}
+          VERSION: ${{ inputs.version }}
+          WAIT: ${{ inputs.wait || 0 }}
+        run: |
+          # An array, and an `if` rather than `[ … ] && …`: under `set -e` the
+          # && form exits the step when VERSION is empty, which is the default.
+          args=(--only "$ECOSYSTEM" --wait "$WAIT")
+          if [ -n "$VERSION" ]; then
+            args+=(--version "$VERSION")
+          fi
+          python scripts/verify_published.py "${args[@]}"

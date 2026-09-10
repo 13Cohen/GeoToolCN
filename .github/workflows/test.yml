@@ -158,6 +158,26 @@ jobs:
           print(f"ok, no geospatial stack required — {GeoToolCN.__file__}")
           PY
 
+      # __version__ was a literal in __init__.py while release.yml rewrites the
+      # version in pyproject.toml from the tag, so 3.0.0rc1 shipped reporting
+      # itself as 2.1.0. Only a real install catches this: in the source tree
+      # both numbers are whatever was last committed, so they agree by accident.
+      - name: The reported version must match the installed one
+        working-directory: /tmp
+        run: |
+          python - <<'PY'
+          from importlib.metadata import version
+          import GeoToolCN
+          installed = version("geotool-cn")
+          assert GeoToolCN.__version__ == installed, (
+              f"__version__ says {GeoToolCN.__version__}, pip installed {installed}"
+          )
+          assert not GeoToolCN.__version__.startswith("0.0.0"), (
+              "a real install fell back to the source-tree placeholder"
+          )
+          print(f"version agrees: {installed}")
+          PY
+
       - name: Report installed size
         working-directory: /tmp
         run: |
@@ -186,6 +206,11 @@ jobs:
         include:
           - lang: python
             adapter: ""
+          # The out-of-process adapter is what scripts/verify_published.py drives
+          # after a release. Exercised here too, or it would rot unnoticed until
+          # a publish had already happened.
+          - lang: python-adapter
+            adapter: "--adapter cmd --cmd 'python conformance/adapters/python.py'"
           - lang: node
             adapter: "--adapter cmd --cmd 'node conformance/adapters/node.mjs'"
           - lang: go

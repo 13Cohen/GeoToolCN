@@ -15,6 +15,28 @@ on:
 # Each ecosystem publishes from its own tag prefix, so a Python release does not
 # drag the Node package along with it.
 jobs:
+  # Which ecosystem this tag releases, and at what version. Derived once here so
+  # the verification job does not have to repeat the prefix-stripping in four
+  # nested expressions.
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      ecosystem: ${{ steps.plan.outputs.ecosystem }}
+      version: ${{ steps.plan.outputs.version }}
+    steps:
+      - id: plan
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          case "$REF_NAME" in
+            py-v*)          echo "ecosystem=python"; echo "version=${REF_NAME#py-v}"  ;;
+            npm-v*)         echo "ecosystem=node";   echo "version=${REF_NAME#npm-v}" ;;
+            cli-v*)         echo "ecosystem=cli";    echo "version=${REF_NAME#cli-v}" ;;
+            # Go keeps the v: it is part of the version the proxy resolves.
+            packages/go/v*) echo "ecosystem=go";     echo "version=${REF_NAME#packages/go/}" ;;
+            *)              echo "ecosystem=";       echo "version=" ;;
+          esac >> "$GITHUB_OUTPUT"
+
   python:
     if: startsWith(github.ref_name, 'py-v')
     runs-on: ubuntu-latest
@@ -147,3 +169,19 @@ jobs:
           tags: |
             ghcr.io/13cohen/geotoolcn:latest
             ghcr.io/13cohen/geotoolcn:${{ github.ref_name }}
+
+  # Publishing succeeded — but succeeding at publishing and having published
+  # something that works are different claims. This installs the version that
+  # was just cut from the registry and runs the full conformance suite against
+  # it. `wait` covers the gap between a publish returning and the registry
+  # serving it.
+  verify:
+    needs: [plan, python, node, go, cli]
+    # Three of the four publish jobs are skipped on any given tag, and a skipped
+    # dependency would otherwise skip this too.
+    if: ${{ !cancelled() && !failure() && needs.plan.outputs.ecosystem != '' }}
+    uses: ./.github/workflows/post-release.yml
+    with:
+      ecosystems: ${{ needs.plan.outputs.ecosystem }}
+      version: ${{ needs.plan.outputs.version }}
+      wait: 300

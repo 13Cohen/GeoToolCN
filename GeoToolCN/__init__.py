@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
-__version__ = "2.1.0"
+# Read from the installed metadata rather than kept here as a second copy.
+# A literal drifts silently: release.yml rewrites the version in pyproject.toml
+# from the tag, so 3.0.0rc1 shipped while this module still reported 2.1.0.
+try:
+    from importlib.metadata import PackageNotFoundError, version as _version
+
+    __version__ = _version("geotool-cn")
+except PackageNotFoundError:  # running from a source tree, never installed
+    __version__ = "0.0.0.dev0"
 
 from .admin_tree import get_administrative_tree
 from .coords import (
