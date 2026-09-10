@@ -115,7 +115,8 @@ jobs:
         env:
           REF_NAME: ${{ github.ref_name }}
         run: |
-          echo "go get github.com/13Cohen/GeoToolCN/packages/go@${REF_NAME#packages/go/}"
+          MODULE=$(head -1 packages/go/go.mod | cut -d' ' -f2)
+          echo "go get $MODULE@${REF_NAME#packages/go/}"
 
   cli:
     if: startsWith(github.ref_name, 'cli-v')

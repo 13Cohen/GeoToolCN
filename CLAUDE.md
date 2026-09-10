@@ -93,8 +93,12 @@ pip install -e .
 - `packages/node/` — `@geotoolcn/core`, zero dependencies, ESM. Plain JS with JSDoc plus a
   hand-written `index.d.ts`: no build step, so nothing to keep in sync with the source
 - `packages/go/` — no cgo, dataset via `go:embed`. Imported as
-  `github.com/13Cohen/GeoToolCN/packages/go`, released by tagging `packages/go/v3.0.0`;
-  both shapes are what Go requires of a module in a subdirectory.
+  `github.com/13Cohen/GeoToolCN/packages/go/v3`, released by tagging `packages/go/v3.0.0`;
+  the two differ on purpose and both are mandatory. The subdirectory prefix in the
+  tag is what Go requires of a module that is not at the repository root; the `/v3`
+  in the import path is what it requires from major version 2 onwards. Omitting the
+  suffix does not fail at build or test time — only `go get` from the proxy rejects
+  it, which is why `packages/go/v3.0.0` was tagged once before this was noticed.
   `packages/go/data/china.full.gtc` is committed — the only duplicated copy in the repo —
   because `go get` fetches only what git holds and `go:embed` cannot reach outside the
   module directory
