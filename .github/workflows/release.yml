@@ -48,9 +48,7 @@ jobs:
       - name: Set version from the tag
         env:
           REF_NAME: ${{ github.ref_name }}
-        run: |
-          VERSION="${REF_NAME#py-v}"
-          sed -i "s/^version = .*/version = \"$VERSION\"/" pyproject.toml
+        run: bash scripts/set_release_version.sh python "${REF_NAME#py-v}"
       - run: pip install build
       - run: python -m build
       # Uses the PYPI_API_TOKEN already configured for this repository.
@@ -72,12 +70,11 @@ jobs:
           node-version: "22"
           registry-url: https://registry.npmjs.org
       - name: Set version and bundle the dataset
-        working-directory: packages/node
         env:
           REF_NAME: ${{ github.ref_name }}
         run: |
-          npm version "${REF_NAME#npm-v}" --no-git-tag-version
-          node scripts/sync-data.mjs
+          bash scripts/set_release_version.sh node "${REF_NAME#npm-v}"
+          node packages/node/scripts/sync-data.mjs
       # NPM_TOKEN expires 2026-12-09 — npm caps write tokens at 90 days, so this
       # job will one day start failing with 401 while the other three ecosystems
       # keep publishing fine. Renewal steps, and how to drop the token entirely

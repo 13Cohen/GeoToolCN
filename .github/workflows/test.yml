@@ -196,6 +196,41 @@ jobs:
           assert total < 8 * 1048576, f"package grew beyond 8 MB ({total / 1048576:.2f} MB)"
           PY
 
+  # release.yml only ever runs on a real tag, so until this existed every line
+  # in it was first executed by the release it was meant to perform. That is how
+  # `npm version` shipped: it exits 1 with "Version not changed" when the repo
+  # already holds the version being released, which is the normal case.
+  release-paths:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Setting the version the repository already has must succeed
+        run: |
+          CURRENT_PY=$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml | head -1)
+          CURRENT_NODE=$(node -p "require('./packages/node/package.json').version")
+          echo "repository holds python=$CURRENT_PY node=$CURRENT_NODE"
+          bash scripts/set_release_version.sh python "$CURRENT_PY"
+          bash scripts/set_release_version.sh node "$CURRENT_NODE"
+
+      - name: Setting a different version must actually change it
+        run: |
+          bash scripts/set_release_version.sh python 9.9.9rc1
+          bash scripts/set_release_version.sh node 9.9.9-rc.1
+          grep -q '^version = "9.9.9rc1"$' pyproject.toml
+          test "$(node -p "require('./packages/node/package.json').version")" = "9.9.9-rc.1"
+
+      - name: And must leave both manifests parseable
+        run: |
+          python -c "import tomllib; tomllib.load(open('pyproject.toml','rb'))"
+          test "$(node -p "require('./packages/node/package.json').name")" = "@geotoolcn/core"
+
   # L4: every implementation is checked against one suite. Adding a language
   # means adding a row here and an adapter under conformance/adapters/.
   conformance-matrix:
