@@ -103,6 +103,9 @@ pip install -e .
   the source it was written from and `scripts/check_translations.py` fails CI when they
   drift. After editing a source: update the translation, then run that script with
   `--update`
+- `docs/RELEASING.md` — which tag publishes what, and the credentials each needs.
+  Records that NPM_TOKEN expires 2026-12-09: npm caps write tokens at 90 days, so
+  the npm job fails alone while the other three ecosystems keep working
 - `DATA_UPDATE_REPORT.md` — Auto-generated report from last data update
 
 ### Hierarchy Resolution — read before touching `reverse()`

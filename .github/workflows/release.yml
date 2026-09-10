@@ -56,6 +56,10 @@ jobs:
         run: |
           npm version "${REF_NAME#npm-v}" --no-git-tag-version
           node scripts/sync-data.mjs
+      # NPM_TOKEN expires 2026-12-09 — npm caps write tokens at 90 days, so this
+      # job will one day start failing with 401 while the other three ecosystems
+      # keep publishing fine. Renewal steps, and how to drop the token entirely
+      # in favour of trusted publishing, are in docs/RELEASING.md.
       - run: npm publish --access public
         working-directory: packages/node
         env:
