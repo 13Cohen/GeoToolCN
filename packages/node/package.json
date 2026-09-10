@@ -1,0 +1,28 @@
+{
+  "name": "@geotoolcn/core",
+  "version": "3.0.0",
+  "description": "Offline geocoding and reverse geocoding for Chinese administrative regions",
+  "type": "module",
+  "main": "./src/index.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./src/index.js"
+    }
+  },
+  "files": ["src", "data", "index.d.ts", "README.md"],
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "prepare": "node scripts/sync-data.mjs",
+    "test": "node --test"
+  },
+  "keywords": ["geocoding", "china", "adcode", "offline", "reverse-geocoding"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/13Cohen/GeoToolCN.git",
+    "directory": "packages/node"
+  },
+  "dependencies": {}
+}

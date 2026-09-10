@@ -1,0 +1,261 @@
+# 已知差异登记表
+#
+# 黄金测试集由参考实现（geopandas 版）生成。若直接照单全收，其缺陷会被固化成
+# "正确答案"，新实现修好了反而测试失败。本文件登记允许出现的差异。
+#
+#   参考实现输出 ──┐
+#                 ├──> 差异比对 ──> 能匹配本表？──> 是：采用新实现的值
+#   被测实现输出 ──┘                           └──> 否：判为回归，CI 失败
+#
+# 任何未登记的差异一律视为回归。新增条目必须走 PR review。
+#
+# kind 决定发布策略：
+#   bugfix           → CHANGELOG 的 Fixed 段
+#   acceptable-loss  ┐
+#   behavior-change  ├→ 必须进 MIGRATION_v3.md，并在 README 显著位置说明
+#   api-change       ┘
+#
+# 字段说明：
+#   applies_to  该差异在哪两个版本之间成立
+#   affects     受影响的 API
+#   match       差分对拍时用于识别该差异的规则；null 表示无法自动匹配，
+#               只能靠 samples 逐条豁免
+#   samples     实测样本，同时作为 conformance 的定向用例
+
+version: 1
+updated: 2026-09-09
+
+divergences:
+  # ------------------------------------------------------------------
+  # v2.1.0 已修复的缺陷。保留在此仅为记录，因为 v2.0.x 的使用者升级到
+  # v2.1.0 时会看到结果变化；v2.1.0 → v3 之间这些差异不再存在。
+  # ------------------------------------------------------------------
+
+  - id: DIV-001
+    title: 离岛坐标的 province 不再为空
+    kind: bugfix
+    applies_to: "2.0.x -> 2.1.0"
+    status: resolved
+    reason: >
+      省级多边形不覆盖某些离岛，而区县级多边形覆盖。旧实现对三个图层各做一次
+      独立的点在多边形判定，于是返回 province=None 却同时返回 city=舟山市 这类
+      自相矛盾的结果。新实现由区县 adcode 反推上级，层级天然自洽。
+    affects: [reverse, reverse_batch, lookup_adcode]
+    match:
+      old: {province: null}
+      new: {province: "!null"}
+      condition: "district != null"
+    samples:
+      - {lat: 30.66457, lng: 122.56396, district: "330922", note: 嵊泗县}
+      - {lat: 28.04746, lng: 121.13337, district: "331083", note: 玉环市}
+      - {lat: 30.21028, lng: 105.65155, district: "500152", note: 重庆潼南区}
+      - {lat: 45.02629, lng: 82.58717, district: "652701", note: 新疆博乐市}
+
+  - id: DIV-002
+    title: city 与 district 不再自相矛盾
+    kind: bugfix
+    applies_to: "2.0.x -> 2.1.0"
+    status: resolved
+    reason: >
+      数据源的 city 层与 district 层在部分地级市交界处彼此重叠，同一个点被两个市
+      同时认领。实测 5 例，均为源数据矛盾而非计算错误。旧实现独立判定每一层，
+      产出 city=包头市 + district=乌拉特前旗（该旗实属巴彦淖尔市）。
+    affects: [reverse, reverse_batch]
+    match:
+      condition: "old.city != parent_of(old.district)"
+    samples:
+      - {lat: 40.87535, lng: 109.89243, district: "150823", old_city: "150200", new_city: "150800", note: 乌拉特前旗 包头→巴彦淖尔}
+      - {lat: 30.97038, lng: 120.72639, district: "330411", old_city: "320500", new_city: "330400", note: 秀洲区 苏州→嘉兴}
+      - {lat: 27.88370, lng: 119.79201, district: "331127", old_city: "330300", new_city: "331100", note: 景宁县 温州→丽水}
+      - {lat: 33.02129, lng: 116.04690, district: "341623", old_city: "341200", new_city: "341600", note: 利辛县 阜阳→亳州}
+      - {lat: 23.06839, lng: 115.93772, district: "445224", old_city: "441500", new_city: "445200", note: 惠来县 汕尾→揭阳}
+
+  - id: DIV-003
+    title: 加格达奇区的省份归属修正
+    kind: bugfix
+    applies_to: "2.0.x -> 2.1.0"
+    status: resolved
+    reason: >
+      加格达奇区(232718) 行政上属黑龙江省大兴安岭地区，地理位置却在内蒙古自治区
+      境内。旧实现按省级多边形判定，返回 province=内蒙古自治区。这一例与 DIV-001
+      不同：province 非空但错误，因此"province 为空时才反查"的修法盖不住它。
+    affects: [reverse, reverse_batch]
+    match:
+      condition: "old.province[:2] != old.district[:2]"
+    samples:
+      - {lat: 50.37295, lng: 124.16537, district: "232718", old_province: "150000", new_province: "230000"}
+
+  - id: DIV-004
+    title: lookup_adcode 能解析省直辖县级行政区
+    kind: bugfix
+    applies_to: "2.0.x -> 2.1.0"
+    status: resolved
+    reason: >
+      30 个省直辖县级行政区（adcode 段 4190/4290/4690/6590）的 city 恒为 None，
+      因为旧实现用 adcode[:4] + "00" 推导父级，会算出 419000 这类不存在的编码。
+      这些区划在 city 层以自身编码存在，须由显式 parent 索引解析。
+    affects: [lookup_adcode]
+    match: null
+    samples:
+      - {adcode: "419001", note: 济源市}
+      - {adcode: "429004", note: 仙桃市}
+      - {adcode: "429021", note: 神农架林区}
+      - {adcode: "469001", note: 五指山市}
+      - {adcode: "659001", note: 石河子市}
+
+  - id: DIV-005
+    title: lookup_adcode 能解析不设区的地级市
+    kind: bugfix
+    applies_to: "2.0.x -> 2.1.0"
+    status: resolved
+    reason: >
+      东莞、中山、儋州、嘉峪关同时存在于 city 与 district 两层，但 lookup_adcode
+      按 adcode 位数判定层级，对它们恒返回 district=None —— 而 reverse() 在同一
+      坐标上能解析出 district。两个 API 对同一编码给出不同答案。
+    affects: [lookup_adcode]
+    match: null
+    samples:
+      - {adcode: "441900", note: 东莞市}
+      - {adcode: "442000", note: 中山市}
+      - {adcode: "460400", note: 儋州市}
+      - {adcode: "620200", note: 嘉峪关市}
+
+  - id: DIV-006
+    title: search(province=…) 不再丢掉离岛
+    kind: bugfix
+    applies_to: "2.0.x -> 2.1.0"
+    status: resolved
+    reason: >
+      旧实现用"代表点是否落在父级多边形内"做过滤，而离岛的代表点本就在省级
+      边界之外，导致 search("嵊泗县", province="浙江省") 返回空列表。改为按
+      adcode 归属过滤。
+    affects: [search]
+    match: null
+    samples:
+      - {query: 嵊泗县, province: 浙江省, old_count: 0, new_count: 1}
+
+  - id: DIV-007
+    title: search(fuzzy=True) 从正则改为纯子串
+    kind: behavior-change
+    applies_to: "2.0.x -> 2.1.0"
+    status: resolved
+    reason: >
+      旧实现把查询串交给 pandas str.contains() 的默认正则模式，属未文档化行为：
+      search("东.区") 匹配 18 条，search("[") 抛 re.error。正则方言跨语言不兼容
+      （Python re / Go RE2 / JS RegExp 语义不同），写进规范会让 conformance 无法
+      收敛。Python 保留 regex=True 作为兼容逃生舱，其他语言不实现。
+    affects: [search]
+    match: null
+    samples:
+      - {query: "东.区", level: district, old_count: 18, new_count: 0}
+      - {query: "西城|东城", level: district, old_count: 2, new_count: 0}
+      - {query: "[", old: "raises re.error", new: "returns []"}
+
+  - id: DIV-008
+    title: list_regions 与 search 结果按 adcode 升序
+    kind: behavior-change
+    applies_to: "2.0.x -> 2.1.0"
+    status: resolved
+    reason: >
+      旧实现返回 GeoJSON 文件顺序。该顺序几乎已是 adcode 升序，仅 330114 排在
+      330113 之前 —— 正因为差异极小，依赖它会让每个后续语言实现都要复现这个怪癖。
+      SPEC §2.5 / §2.3 明确规定排序。
+    affects: [list_regions, search]
+    match: null
+    samples:
+      - {level: district, detail: "330113 与 330114 的相对顺序"}
+
+  # ------------------------------------------------------------------
+  # v2.1.0 -> v3.0.0（GTC 纯 Python 实现）的预期差异。
+  # 实现 P1 时逐条验证；若出现本表之外的差异，说明设计有未预料的影响。
+  # ------------------------------------------------------------------
+
+  - id: DIV-101
+    title: district 为空时 city 也置空
+    kind: acceptable-loss
+    applies_to: "2.1.0 -> 3.0.0"
+    status: expected
+    reason: >
+      v3 的 full/lite 档不含 city 层几何（city 的元数据保留，仅丢弃多边形）。
+      因此当某点落在 city 多边形内但不在任何 district 多边形内时（沿海/边界空隙），
+      v3 的 city 为空而 v2.1 有值。实测发生率 8622 点中 2 例 = 0.023%。
+      取此方案而非保留 city 几何（+1.5 MB），因语义更自洽：一个说不出区县的点，
+      其"市"本就来路不明。
+    affects: [reverse, reverse_batch]
+    match:
+      old: {district: null, city: "!null"}
+      new: {district: null, city: null}
+    samples:
+      - {lat: 22.97637, lng: 110.74743, old_city: "450900", note: 玉林市辖域内的区县空隙}
+
+  - id: DIV-102
+    title: data_dir 不再接受 GeoJSON 目录
+    kind: api-change
+    applies_to: "2.1.0 -> 3.0.0"
+    status: expected
+    reason: >
+      决策 D3 原定「传入目录时仍按旧路径读取 GeoJSON」以保持兼容，但该决策是在
+      架构定型前做出的，事后不可行：v3 不依赖 geopandas，也就无从读取 GeoJSON。
+      保留这条路径等于把 135 MB 的依赖重新装回来，与 v3 的全部意义相悖。
+
+      实际行为：data_dir 接受 .gtc 文件路径，或含 china.full.gtc 的目录；
+      传入只有 GeoJSON 的目录会抛出 FileNotFoundError，并提示改用
+      pipeline/build_gtc.py 构建。绝大多数调用方不传该参数，不受影响。
+
+      D3 因此作废，以本条为准。MIGRATION_v3.md §2 描述的是实际行为。
+    affects: [GeoTool.__init__]
+    match: null
+    samples:
+      - {data_dir: "path/to/geojson/", old: "读取 GeoJSON", new: "raises FileNotFoundError"}
+      - {data_dir: "path/to/custom.gtc", old: "不支持", new: "读取该 .gtc"}
+
+  - id: DIV-103
+    title: 无区县时的 city 不再跨省矛盾
+    kind: bugfix
+    applies_to: "2.1.0 -> 3.0.0"
+    status: expected
+    reason: >
+      v2.1 在没有区县命中时，仍对 city 图层独立做点在多边形判定，因此可能返回
+      与自己 province 不同省的市。v3 此时只从省级网格取 province，直辖市/特别
+      行政区的 city 由 province 派生，其余为空，结构上不可能跨省。
+    affects: [reverse, reverse_batch]
+    match:
+      condition: "old.district == null and old.city[:2] != old.province[:2]"
+    samples:
+      - {lat: 30.571865, lng: 108.692278, old: ["500000", "422800", null],
+         new: ["500000", "500000", null], note: 重庆市境内却返回恩施州}
+
+  - id: DIV-104
+    title: 边界附近的归属因量化而翻转
+    kind: acceptable-loss
+    applies_to: "2.1.0 -> 3.0.0"
+    status: expected
+    reason: >
+      .gtc 把坐标量化到 1e-5 度（约 1.11 米），因此距行政边界不足一个量化步长的
+      点可能落到另一侧。实测 16509 个反查用例中 10 条（0.061%），全部距争议边界
+      0.019 ~ 0.460 米，均在一个量化步长内。这些点本就落在数据自身精度之下——
+      DataV 边界的名义精度远粗于半米。
+    affects: [reverse, reverse_batch, is_in_china, is_in_region]
+    match:
+      condition: "distance_to_disputed_boundary < 1 quantisation step"
+    samples:
+      - {lat: 35.159165, lng: 114.280733, old: "410727", new: "410726", metres: 0.019}
+      - {lat: 31.077564, lng: 117.899444, old: "340281", new: "340706", metres: 0.019}
+      - {lat: 36.370829, lng: 120.859146, old: "370215", new: null, metres: 0.113}
+      - {lat: 29.779500, lng: 112.933955, old: "421023", new: "430623", metres: 0.460}
+
+  - id: DIV-105
+    title: is_in_china 与 reverse 不再互相矛盾
+    kind: bugfix
+    applies_to: "2.1.0 -> 3.0.0"
+    status: expected
+    reason: >
+      v2.1 的 is_in_china 直接判省级多边形，而 reverse 由区县 adcode 反推 province。
+      离岛因此得到 is_in_china=False 却同时 reverse().province=浙江省。SPEC §2.8
+      规定两者等价；v3 先查区县网格再回退省级网格，二者同源。
+    affects: [is_in_china]
+    match:
+      condition: "old.is_in_china == false and old.reverse().province != null"
+    samples:
+      - {lat: 30.66457, lng: 122.56396, note: 嵊泗县}
+      - {lat: 28.04746, lng: 121.13337, note: 玉环市}

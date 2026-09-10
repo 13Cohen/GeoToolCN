@@ -1,0 +1,149 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "py-v*"
+      - "npm-v*"
+      - "cli-v*"
+      - "data-*"
+      # Go needs no publish job: `go get` resolves straight from git tags. The
+      # tag shape is dictated by the module living in a subdirectory.
+      - "packages/go/v*"
+  workflow_dispatch:
+
+# Each ecosystem publishes from its own tag prefix, so a Python release does not
+# drag the Node package along with it.
+jobs:
+  python:
+    if: startsWith(github.ref_name, 'py-v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Set version from the tag
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          VERSION="${REF_NAME#py-v}"
+          sed -i "s/^version = .*/version = \"$VERSION\"/" pyproject.toml
+      - run: pip install build
+      - run: python -m build
+      # Uses the PYPI_API_TOKEN already configured for this repository.
+      # Trusted publishing (OIDC) would be preferable — no long-lived token —
+      # but it needs a one-time publisher configured on PyPI, and omitting the
+      # password here silently selects it, so the first release would have
+      # failed on a repository that has a perfectly good token.
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+
+  node:
+    if: startsWith(github.ref_name, 'npm-v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: https://registry.npmjs.org
+      - name: Set version and bundle the dataset
+        working-directory: packages/node
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          npm version "${REF_NAME#npm-v}" --no-git-tag-version
+          node scripts/sync-data.mjs
+      # NPM_TOKEN expires 2026-12-09 — npm caps write tokens at 90 days, so this
+      # job will one day start failing with 401 while the other three ecosystems
+      # keep publishing fine. Renewal steps, and how to drop the token entirely
+      # in favour of trusted publishing, are in docs/RELEASING.md.
+      - run: npm publish --access public
+        working-directory: packages/node
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  go:
+    # There is nothing to publish — the proxy serves whatever the tag points at.
+    # So the tag itself is the release, and this verifies it is not broken:
+    # `go get` fetches only what git holds, and go:embed cannot reach outside
+    # the module, which is why packages/go/data is committed rather than synced.
+    if: startsWith(github.ref_name, 'packages/go/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Build from only what git tracks
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          mkdir -p /tmp/asgit
+          git ls-files packages/go | tar -cf - -T - | tar -x -C /tmp/asgit
+          cd /tmp/asgit/packages/go
+          test -f data/china.full.gtc || {
+            echo "::error::data/china.full.gtc is not committed — go get would fail to build"
+            exit 1
+          }
+          go build ./...
+          go test ./...
+
+      - name: Report the module path users will import
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          echo "go get github.com/13Cohen/GeoToolCN/packages/go@${REF_NAME#packages/go/}"
+
+  cli:
+    if: startsWith(github.ref_name, 'cli-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Build a static binary per platform
+        working-directory: packages/go
+        env:
+          CGO_ENABLED: "0"
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          bash scripts/sync-data.sh
+          VERSION="${REF_NAME#cli-v}"
+          mkdir -p /tmp/dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+            GOOS=${target%/*} GOARCH=${target#*/}
+            ext=""
+            [ "$GOOS" = "windows" ] && ext=".exe"
+            GOOS=$GOOS GOARCH=$GOARCH go build -trimpath \
+              -ldflags="-s -w -X main.version=$VERSION" \
+              -o "/tmp/dist/geotoolcn-$GOOS-$GOARCH$ext" ./cmd/geotoolcn
+          done
+          ls -la /tmp/dist
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: /tmp/dist/*
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ghcr.io/13cohen/geotoolcn:latest
+            ghcr.io/13cohen/geotoolcn:${{ github.ref_name }}

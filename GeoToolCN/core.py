@@ -1,24 +1,20 @@
+"""GeoTool backed by the .gtc binary — standard library only.
+
+Behaviourally identical to the geopandas implementation it replaces, minus the
+divergences registered in ``conformance/known-divergences.yaml``.  See SPEC.md
+§2 for the contract each method implements.
+"""
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Sequence
 
-import geopandas as gpd
-import pandas as pd
-from shapely.geometry import Point
+from ._gtc import LEVELS, GTCData
+from ._hierarchy import MERGED_PREFIXES
 
-_LEVELS = ("province", "city", "district")
-_FILES = {
-    "province": "china_province.geojson",
-    "city": "china_city.geojson",
-    "district": "china_district.geojson",
-}
 _DEFAULT_DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
-
-# Municipalities (直辖市) and SARs (特别行政区) that have no city-level
-# subdivision — districts sit directly under the province.
-_MERGED_PREFIXES = frozenset({"11", "12", "31", "50", "81", "82"})
+_DEFAULT_GTC = os.path.join(_DEFAULT_DATA_DIR, "china.full.gtc")
 
 
 @dataclass
@@ -41,62 +37,52 @@ class ReverseResult:
     district: Region | None = None
 
 
-@dataclass
-class _LevelData:
-    """Loaded GeoDataFrame plus prebuilt lookup indexes for one admin level."""
-
-    gdf: gpd.GeoDataFrame
-    name_index: dict[str, list[int]]  # name -> row positions
-    code_index: dict[str, int]  # adcode -> row position
-
-    @staticmethod
-    def load(path: str) -> "_LevelData":
-        gdf = gpd.read_file(path)
-        # Fix any invalid geometries from the data source
-        gdf["geometry"] = gdf["geometry"].make_valid()
-        # Ensure spatial index is built
-        _ = gdf.sindex
-
-        name_idx: dict[str, list[int]] = {}
-        code_idx: dict[str, int] = {}
-        for i, row in enumerate(gdf.itertuples()):
-            name_idx.setdefault(row.name, []).append(i)
-            code_idx[str(row.adcode)] = i
-        return _LevelData(gdf=gdf, name_index=name_idx, code_index=code_idx)
-
-
 class GeoTool:
     """Offline geocoding toolkit for Chinese administrative regions.
 
     Parameters
     ----------
     data_dir : str, optional
-        Directory containing ``china_province.geojson``,
-        ``china_city.geojson``, and ``china_district.geojson``.
-        Defaults to the bundled data shipped with this package.
+        Path to a ``.gtc`` file, or a directory containing one.  Defaults to
+        the bundled dataset.  For compatibility the parameter keeps its old
+        name; a directory of GeoJSON is no longer accepted (see
+        ``MIGRATION_v3.md``).
     """
 
     def __init__(self, data_dir: str | None = None) -> None:
-        self._data_dir = data_dir or _DEFAULT_DATA_DIR
-        self._levels: dict[str, _LevelData] = {}
-        self._load_all()
+        path = data_dir or _DEFAULT_GTC
+        if os.path.isdir(path):
+            candidate = os.path.join(path, "china.full.gtc")
+            if not os.path.exists(candidate):
+                raise FileNotFoundError(
+                    f"no china.full.gtc in {path!r}. Version 3 reads a .gtc "
+                    f"binary rather than a directory of GeoJSON; build one with "
+                    f"`python pipeline/build_gtc.py`."
+                )
+            path = candidate
+        self._data = GTCData(path)
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _load_all(self) -> None:
-        for level, filename in _FILES.items():
-            path = os.path.join(self._data_dir, filename)
-            self._levels[level] = _LevelData.load(path)
+    def _region(self, index: int) -> Region:
+        data = self._data
+        return Region(
+            name=data.names[index],
+            code=data.adcodes[index],
+            level=LEVELS[data.levels[index]],
+            latitude=data.lats[index],
+            longitude=data.lngs[index],
+        )
+
+    def _region_by_code(self, code: str, level: str) -> Region | None:
+        index = self._data.index_of(code, level)
+        return self._region(index) if index is not None else None
 
     @staticmethod
     def _province_as_city(province: Region) -> Region:
-        """Clone a province Region with level set to ``"city"``.
-
-        Used for municipalities and SARs where the province doubles as
-        the city to match conventional Chinese geocoding API behaviour.
-        """
+        """Municipalities and SARs report the province as their city."""
         return Region(
             name=province.name,
             code=province.code,
@@ -105,23 +91,26 @@ class GeoTool:
             longitude=province.longitude,
         )
 
-    def _point_in_level(self, level: str, point: Point) -> Region | None:
-        ld = self._levels[level]
-        gdf = ld.gdf
-        # Use spatial index for fast candidate filtering
-        candidates = list(gdf.sindex.query(point, predicate="intersects"))
-        for idx in candidates:
-            row = gdf.iloc[idx]
-            if row.geometry.contains(point):
-                centroid = row.geometry.representative_point()
-                return Region(
-                    name=row["name"],
-                    code=str(row["adcode"]),
-                    level=level,
-                    latitude=round(centroid.y, 6),
-                    longitude=round(centroid.x, 6),
-                )
-        return None
+    def _chain_from_district(self, index: int) -> ReverseResult:
+        """SPEC §2.1: derive the upper levels from the district's adcode.
+
+        Testing each layer independently produces contradictions, because the
+        source layers overlap and disagree — see SPEC §2.1 and the DIV-001..003
+        entries in the divergence registry.
+        """
+        district = self._region(index)
+        province_code = district.code[:2] + "0000"
+        province = self._region_by_code(province_code, "province")
+
+        parent = self._data.parents[index]
+        if parent is None:
+            city = None
+        elif parent == province_code:
+            city = self._province_as_city(province) if province else None
+        else:
+            city = self._region_by_code(parent, "city")
+
+        return ReverseResult(province=province, city=city, district=district)
 
     # ------------------------------------------------------------------
     # Reverse geocoding
@@ -141,21 +130,29 @@ class GeoTool:
         -------
         ReverseResult
         """
-        point = Point(lng, lat)
-        province = self._point_in_level("province", point)
-        city = self._point_in_level("city", point)
-        # Municipalities/SARs have no city-level GeoJSON; use province
-        if city is None and province is not None:
-            if province.code[:2] in _MERGED_PREFIXES:
-                city = self._province_as_city(province)
-        return ReverseResult(
-            province=province, city=city, district=self._point_in_level("district", point)
+        index = self._data.locate(lat, lng)
+        if index is not None:
+            return self._chain_from_district(index)
+
+        # No district covers the point — Taiwan is published at province level
+        # only, and coastal gaps leave slivers between districts.  Fall back to
+        # the province grid.  The city stays empty because the .gtc carries no
+        # city geometry (DIV-101, measured at 0.023% of points).
+        province_index = self._data.locate_province(lat, lng)
+        if province_index is None:
+            return ReverseResult()
+        province = self._region(province_index)
+        city = (
+            self._province_as_city(province)
+            if province.code[:2] in MERGED_PREFIXES
+            else None
         )
+        return ReverseResult(province=province, city=city, district=None)
 
     def reverse_batch(
         self, coords: Sequence[tuple[float, float]]
     ) -> list[ReverseResult]:
-        """Reverse-geocode many coordinates at once using spatial join.
+        """Reverse-geocode many coordinates.
 
         Parameters
         ----------
@@ -165,48 +162,7 @@ class GeoTool:
         -------
         list[ReverseResult]
         """
-        if not coords:
-            return []
-
-        points = [Point(lng, lat) for lat, lng in coords]
-        pts_gdf = gpd.GeoDataFrame(
-            {"idx": range(len(coords))},
-            geometry=points,
-            crs=self._levels["province"].gdf.crs,
-        )
-
-        joined: dict[str, pd.DataFrame] = {}
-        for level in _LEVELS:
-            gdf = self._levels[level].gdf
-            j = gpd.sjoin(pts_gdf, gdf, how="left", predicate="within")
-            joined[level] = j
-
-        results: list[ReverseResult] = []
-        for i, pt in enumerate(points):
-            kw: dict[str, Region | None] = {}
-            for level in _LEVELS:
-                j = joined[level]
-                rows = j[j["idx"] == i]
-                if rows.empty or pd.isna(rows.iloc[0].get("index_right")):
-                    kw[level] = None
-                else:
-                    row = rows.iloc[0]
-                    level_gdf = self._levels[level].gdf
-                    matched_geom = level_gdf.iloc[int(row["index_right"])].geometry
-                    rep = matched_geom.representative_point()
-                    kw[level] = Region(
-                        name=row["name"],
-                        code=str(row["adcode"]),
-                        level=level,
-                        latitude=round(rep.y, 6),
-                        longitude=round(rep.x, 6),
-                    )
-            # Municipalities/SARs: fill city from province
-            if kw["city"] is None and kw["province"] is not None:
-                if kw["province"].code[:2] in _MERGED_PREFIXES:
-                    kw["city"] = self._province_as_city(kw["province"])
-            results.append(ReverseResult(**kw))
-        return results
+        return [self.reverse(lat, lng) for lat, lng in coords]
 
     # ------------------------------------------------------------------
     # Forward geocoding / search
@@ -220,6 +176,7 @@ class GeoTool:
         province: str | None = None,
         city: str | None = None,
         fuzzy: bool = True,
+        regex: bool = False,
     ) -> list[Region]:
         """Search for regions by name or adcode.
 
@@ -236,44 +193,78 @@ class GeoTool:
         fuzzy : bool
             If *True* (default), also match regions whose name *contains*
             the query when no exact match is found.
+        regex : bool
+            Treat *query* as a regular expression during fuzzy matching.
+            Defaults to *False* (plain substring).
 
         Returns
         -------
         list[Region]
-
-        Examples
-        --------
-        >>> geo.search("朝阳区", province="北京市")
-        [Region(name='朝阳区', ...)]  # only Beijing's 朝阳区
         """
-        is_code = query.isdigit()
-        levels = [level] if level else list(_LEVELS)
-        results: list[Region] = []
+        data = self._data
+        levels = [level] if level else list(LEVELS)
+        matches: list[int] = []
 
-        for lvl in levels:
-            ld = self._levels[lvl]
-            if is_code:
-                pos = ld.code_index.get(query)
-                if pos is not None:
-                    row = ld.gdf.iloc[pos]
-                    results.append(self._row_to_region(row, lvl))
-            else:
-                positions = ld.name_index.get(query)
-                if positions:
-                    for pos in positions:
-                        row = ld.gdf.iloc[pos]
-                        results.append(self._row_to_region(row, lvl))
-                elif fuzzy:
-                    matched = ld.gdf[ld.gdf["name"].str.contains(query, na=False)]
-                    for _, row in matched.iterrows():
-                        results.append(self._row_to_region(row, lvl))
+        for level_name in levels:
+            start, end = data.level_ranges[level_name]
+            if query.isdigit():
+                matches += [i for i in range(start, end) if data.adcodes[i] == query]
+                continue
+            exact = [i for i in data.by_name.get(query, ()) if start <= i < end]
+            if exact:
+                matches += exact
+            elif fuzzy:
+                matches += self._fuzzy_match(query, start, end, regex)
 
+        regions = [self._region(i) for i in matches]
         if province is not None:
-            results = self._filter_by_parent(results, "province", province)
+            regions = self._filter_by_parent(regions, "province", province)
         if city is not None:
-            results = self._filter_by_parent(results, "city", city)
+            regions = self._filter_by_parent(regions, "city", city)
 
-        return results
+        regions.sort(key=lambda r: (LEVELS.index(r.level), r.code))
+        return regions
+
+    def _fuzzy_match(self, query: str, start: int, end: int, regex: bool) -> list[int]:
+        data = self._data
+        if regex:
+            import re  # noqa: PLC0415 - only needed on the compatibility path
+
+            pattern = re.compile(query)
+            return [i for i in range(start, end) if pattern.search(data.names[i])]
+        return [i for i in range(start, end) if query in data.names[i]]
+
+    def _filter_by_parent(
+        self, regions: list[Region], parent_level: str, parent_query: str
+    ) -> list[Region]:
+        """SPEC §2.4: filter by adcode relationship, never by geometry.
+
+        A region's representative point can lie outside its own parent's
+        polygon — islands especially — so a geometric test silently drops
+        valid matches.
+        """
+        data = self._data
+        if parent_query.isdigit():
+            index = data.index_of(parent_query, parent_level)
+            if index is None:
+                return []
+            parent_code = parent_query
+        else:
+            start, end = data.level_ranges[parent_level]
+            candidates = [i for i in data.by_name.get(parent_query, ()) if start <= i < end]
+            if not candidates:
+                return []
+            parent_code = data.adcodes[candidates[0]]
+
+        return [r for r in regions if self._is_under(r, parent_level, parent_code)]
+
+    def _is_under(self, region: Region, parent_level: str, parent_code: str) -> bool:
+        if parent_level == "province":
+            return region.code[:2] == parent_code[:2]
+        if region.level == "district":
+            index = self._data.index_of(region.code, "district")
+            return index is not None and self._data.parents[index] == parent_code
+        return region.code == parent_code
 
     # ------------------------------------------------------------------
     # Region listing / lookup
@@ -290,16 +281,12 @@ class GeoTool:
         Returns
         -------
         list[Region]
+            Sorted by adcode ascending.
         """
-        if level not in _LEVELS:
-            raise ValueError(
-                f"Invalid level {level!r}. Must be one of {_LEVELS}"
-            )
-        ld = self._levels[level]
-        return [
-            self._row_to_region(ld.gdf.iloc[i], level)
-            for i in range(len(ld.gdf))
-        ]
+        if level not in LEVELS:
+            raise ValueError(f"Invalid level {level!r}. Must be one of {LEVELS}")
+        start, end = self._data.level_ranges[level]
+        return [self._region(i) for i in range(start, end)]
 
     def get_region(self, code: str) -> Region | None:
         """Get a single region by its adcode.
@@ -313,11 +300,10 @@ class GeoTool:
         -------
         Region or None
         """
-        for lvl in _LEVELS:
-            ld = self._levels[lvl]
-            pos = ld.code_index.get(code)
-            if pos is not None:
-                return self._row_to_region(ld.gdf.iloc[pos], lvl)
+        for level in LEVELS:
+            region = self._region_by_code(code, level)
+            if region is not None:
+                return region
         return None
 
     # ------------------------------------------------------------------
@@ -334,14 +320,6 @@ class GeoTool:
         if adcode.endswith("00"):
             return "city"
         return "district"
-
-    def _lookup_adcode(self, level: str, code: str) -> Region | None:
-        """Look up a Region by its adcode at a specific level."""
-        ld = self._levels[level]
-        pos = ld.code_index.get(code)
-        if pos is None:
-            return None
-        return self._row_to_region(ld.gdf.iloc[pos], level)
 
     def lookup_adcode(self, adcode: str) -> ReverseResult | None:
         """Look up the administrative hierarchy for a 6-digit adcode.
@@ -363,29 +341,24 @@ class GeoTool:
             return None
 
         prefix2 = adcode[:2]
-        is_merged = prefix2 in _MERGED_PREFIXES
-
-        # Province
-        prov_code = prefix2 + "0000"
-        province = self._lookup_adcode("province", prov_code)
+        province_code = prefix2 + "0000"
+        province = self._region_by_code(province_code, "province")
 
         if level == "province":
             return ReverseResult(province=province) if province else None
 
-        # City
-        if is_merged:
-            # Municipalities/SARs have no city-level GeoJSON; use province
+        if prefix2 in MERGED_PREFIXES:
             city = self._province_as_city(province) if province else None
+        elif level == "district":
+            index = self._data.index_of(adcode, "district")
+            parent = self._data.parents[index] if index is not None else None
+            city = self._region_by_code(parent, "city") if parent else None
         else:
-            city = self._lookup_adcode("city", adcode[:4] + "00")
+            city = self._region_by_code(adcode, "city")
 
-        if level == "city":
-            if province is None and city is None:
-                return None
-            return ReverseResult(province=province, city=city)
-
-        # District
-        district = self._lookup_adcode("district", adcode)
+        # Prefecture-level cities with no subdivisions (东莞, 中山, 儋州,
+        # 嘉峪关) appear at both levels under one code, so try either way.
+        district = self._region_by_code(adcode, "district")
 
         if province is None and city is None and district is None:
             return None
@@ -409,7 +382,10 @@ class GeoTool:
         -------
         bool
         """
-        return self._point_in_level("province", Point(lng, lat)) is not None
+        return (
+            self._data.locate(lat, lng) is not None
+            or self._data.locate_province(lat, lng) is not None
+        )
 
     def is_in_region(self, lat: float, lng: float, adcode: str) -> bool:
         """Check whether a coordinate falls within a specific admin region.
@@ -435,60 +411,27 @@ class GeoTool:
         level = self._adcode_level(adcode)
         if level is None:
             raise ValueError(f"Invalid adcode: {adcode!r}")
+        if self._data.index_of(adcode) is None:
+            raise ValueError(f"Region not found for adcode {adcode!r}")
 
-        prefix2 = adcode[:2]
-        if level == "city" and prefix2 in _MERGED_PREFIXES:
-            lookup_code = prefix2 + "0000"
-            lookup_level = "province"
-        else:
-            lookup_code = adcode
-            lookup_level = level
-
-        ld = self._levels[lookup_level]
-        pos = ld.code_index.get(lookup_code)
-        if pos is None:
-            raise ValueError(
-                f"Region not found for adcode {adcode!r}"
+        if level == "province":
+            # Answer from the province grid directly: Taiwan has no districts,
+            # so routing this through the district lookup would report False
+            # for every point on the island.
+            province_index = self._data.locate_province(lat, lng)
+            return (
+                province_index is not None
+                and self._data.adcodes[province_index][:2] == adcode[:2]
             )
 
-        return ld.gdf.iloc[pos].geometry.contains(Point(lng, lat))
+        index = self._data.locate(lat, lng)
+        if index is None:
+            return False
+        district_code = self._data.adcodes[index]
 
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
-    def _filter_by_parent(
-        self, regions: list[Region], parent_level: str, parent_query: str
-    ) -> list[Region]:
-        """Keep only regions whose representative point is within *parent_query*."""
-        # Resolve parent geometry
-        parent_ld = self._levels[parent_level]
-        if parent_query.isdigit():
-            pos = parent_ld.code_index.get(parent_query)
-            if pos is None:
-                return []
-            parent_geom = parent_ld.gdf.iloc[pos].geometry
-        else:
-            positions = parent_ld.name_index.get(parent_query)
-            if not positions:
-                return []
-            parent_geom = parent_ld.gdf.iloc[positions[0]].geometry
-
-        filtered: list[Region] = []
-        for r in regions:
-            if r.latitude is not None and r.longitude is not None:
-                pt = Point(r.longitude, r.latitude)
-                if parent_geom.contains(pt):
-                    filtered.append(r)
-        return filtered
-
-    @staticmethod
-    def _row_to_region(row: pd.Series, level: str) -> Region:
-        pt = row.geometry.representative_point()
-        return Region(
-            name=row["name"],
-            code=str(row["adcode"]),
-            level=level,
-            latitude=round(pt.y, 6),
-            longitude=round(pt.x, 6),
-        )
+        if level == "district":
+            return district_code == adcode
+        # City: municipalities and SARs resolve through the province instead.
+        if adcode[:2] in MERGED_PREFIXES:
+            return district_code[:2] == adcode[:2]
+        return self._data.parents[index] == adcode

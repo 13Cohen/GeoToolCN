@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-__version__ = "1.0.1"
+__version__ = "2.1.0"
 
 from .admin_tree import get_administrative_tree
 from .coords import (
@@ -73,10 +73,11 @@ def search(
     province: str | None = None,
     city: str | None = None,
     fuzzy: bool = True,
+    regex: bool = False,
 ) -> list[Region]:
     """Shortcut for ``GeoTool().search(query, ...)``."""
     return _get_instance().search(
-        query, level=level, province=province, city=city, fuzzy=fuzzy
+        query, level=level, province=province, city=city, fuzzy=fuzzy, regex=regex
     )
 
 

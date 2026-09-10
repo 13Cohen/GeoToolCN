@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "geotool-cn"
-version = "2.0.1"
+version = "3.0.0"
 description = "Offline geocoding and reverse geocoding for Chinese administrative regions"
 readme = "README.md"
 license = "MIT"
@@ -17,9 +17,20 @@ classifiers = [
     "Operating System :: OS Independent",
     "Topic :: Scientific/Engineering :: GIS",
 ]
-dependencies = [
+# No runtime dependencies. Version 2 needed geopandas + shapely (~135 MB
+# installed); the spatial index is now precomputed into the bundled .gtc, so
+# a lookup is a binary search plus, at most, a couple of ray casts.
+dependencies = []
+
+[project.optional-dependencies]
+# Only for rebuilding the data and running the differential test against the
+# geopandas reference implementation. Not needed to use the library.
+dev = [
     "geopandas>=0.14",
     "shapely>=2",
+    "numpy",
+    "pytest",
+    "pyyaml",
 ]
 
 [project.urls]
@@ -30,7 +41,14 @@ Issues = "https://github.com/13Cohen/GeoToolCN/issues"
 include = ["GeoToolCN*"]
 
 [tool.setuptools.package-data]
-GeoToolCN = ["data/*.geojson", "data/*.json"]
+# The GeoJSON stays in the repository for the build pipeline but is not
+# shipped: it is 28 MB against 6 MB for the .gtc built from it.
+GeoToolCN = ["data/*.gtc", "data/china_admin.json", "data/DATA_VERSION.json"]
+
+[tool.setuptools.exclude-package-data]
+# Stated explicitly as well: a stale egg-info/SOURCES.txt from an earlier build
+# will otherwise drag the GeoJSON back in, quadrupling the wheel.
+GeoToolCN = ["data/*.geojson"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,0 +1,272 @@
+name: Test
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install package and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run test suite
+        run: pytest -q
+
+  validate-data:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      # Guards the bundled GeoJSON/admin data against corruption and against
+      # structural regressions introduced by a DataV refresh.
+      - name: Validate bundled data
+        run: python scripts/validate_data.py
+
+      - name: Check line endings
+        run: python scripts/check_line_endings.py
+
+      # Two copies of a spec that can disagree are worse than one. Each
+      # translation records the hash of the source it was written from.
+      - name: Check translations are in sync
+        run: python scripts/check_translations.py
+
+      # L0 (RFC-002): checks the built artifact, not its behaviour. Conformance
+      # only reaches a file that loads at all.
+      - name: Validate the shipped dataset
+        run: python scripts/validate_gtc.py --round-trip
+
+      # All three tiers are a documented contract (SPEC §4.1), so all three must
+      # build and validate — otherwise only `full` is ever really exercised.
+      - name: Build and validate every tier
+        run: |
+          for tier in mini lite; do
+            python pipeline/build_gtc.py --dataset "$tier" --out "/tmp/china.$tier.gtc"
+            python scripts/validate_gtc.py "/tmp/china.$tier.gtc"
+          done
+
+      - name: A geometry-free dataset must refuse geometry calls
+        run: |
+          python - <<'PY'
+          from GeoToolCN._gtc import GTCData, GeometryUnavailable
+          data = GTCData("/tmp/china.mini.gtc")
+          assert not data.has_geometry
+          assert data.record_count == 3271
+          try:
+              data.locate(39.9, 116.4)
+          except GeometryUnavailable:
+              print("mini correctly refuses geometry lookups")
+          else:
+              raise SystemExit("mini answered a geometry query without geometry")
+          PY
+
+  conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      # The contract every port is held to. Failures here mean either a
+      # regression or an entry missing from conformance/known-divergences.yaml.
+      - name: Run conformance suite
+        run: python conformance/run.py
+
+      # The suite is generated from this implementation, so it must still match.
+      # Compared per file rather than with `git diff`: coords.jsonl holds sin/cos
+      # results at 12 decimals, and libm differs between platforms in the last
+      # digits, so byte-equality would fail on a correct file.
+      - name: Check the suite is up to date
+        run: python conformance/generate.py --check
+
+  no-runtime-dependencies:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The whole point of version 3. Installing without extras must pull in
+      # nothing, and the package must work with geopandas absent entirely.
+      - name: Install without extras
+        run: |
+          python -m pip install --upgrade pip
+          pip install .
+
+      # Everything below runs from /tmp on purpose. Run from the checkout and
+      # `import GeoToolCN` resolves to the source tree — which carries the 28 MB
+      # of GeoJSON the wheel deliberately excludes — so the check would measure
+      # the repository instead of the installed package.
+      - name: Assert no third-party dependencies
+        working-directory: /tmp
+        run: |
+          REQUIRES=$(pip show geotool-cn | grep '^Requires:' | cut -d: -f2- | tr -d ' ')
+          if [ -n "$REQUIRES" ]; then
+            echo "::error::geotool-cn should have no runtime dependencies, got: $REQUIRES"
+            exit 1
+          fi
+          python - <<'PY'
+          import sys
+          import GeoToolCN
+          if "geopandas" in sys.modules or "shapely" in sys.modules:
+              raise SystemExit("importing GeoToolCN pulled in the geospatial stack")
+          for blocked in ("geopandas", "shapely", "pandas", "numpy"):
+              sys.modules[blocked] = None      # force ImportError on use
+          result = GeoToolCN.reverse(39.9042, 116.4074)
+          assert result.district.name == "东城区", result
+          assert len(GeoToolCN.get_administrative_tree()) == 34
+          print(f"ok, no geospatial stack required — {GeoToolCN.__file__}")
+          PY
+
+      - name: Report installed size
+        working-directory: /tmp
+        run: |
+          python - <<'PY'
+          import os, sysconfig
+          import GeoToolCN
+          root = os.path.dirname(GeoToolCN.__file__)
+          if not root.startswith(sysconfig.get_paths()["purelib"]):
+              raise SystemExit(f"measured the source tree, not the install: {root}")
+          total = sum(
+              os.path.getsize(os.path.join(dirpath, name))
+              for dirpath, _, names in os.walk(root)
+              for name in names
+          )
+          print(f"installed: {total / 1048576:.2f} MB at {root}")
+          assert total < 8 * 1048576, f"package grew beyond 8 MB ({total / 1048576:.2f} MB)"
+          PY
+
+  # L4: every implementation is checked against one suite. Adding a language
+  # means adding a row here and an adapter under conformance/adapters/.
+  conformance-matrix:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lang: python
+            adapter: ""
+          - lang: node
+            adapter: "--adapter cmd --cmd 'node conformance/adapters/node.mjs'"
+          - lang: go
+            adapter: "--adapter cmd --cmd /tmp/gtc-adapter"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+          node packages/node/scripts/sync-data.mjs
+          bash packages/go/scripts/sync-data.sh
+          cd packages/go && CGO_ENABLED=0 go build -o /tmp/gtc-adapter ./cmd/conformance-adapter
+
+      - name: Conformance (${{ matrix.lang }})
+        run: python conformance/run.py ${{ matrix.adapter }}
+
+  node:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Sync the dataset and test
+        working-directory: packages/node
+        run: |
+          node scripts/sync-data.mjs
+          node --test
+
+      # The Node package must stay dependency-free too.
+      - name: Assert no dependencies
+        run: |
+          DEPS=$(node -p "Object.keys(require('./packages/node/package.json').dependencies||{}).join(',')")
+          if [ -n "$DEPS" ]; then
+            echo "::error::@geotoolcn/core should have no dependencies, got: $DEPS"
+            exit 1
+          fi
+
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Sync the dataset, vet and test
+        working-directory: packages/go
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          bash scripts/sync-data.sh
+          go vet ./...
+          go test ./...
+
+      # No cgo is the point: it is what keeps cross-compilation working, which
+      # the Go ecosystem expects of a library like this.
+      - name: Cross-compile without cgo
+        working-directory: packages/go
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          for target in linux/amd64 linux/arm64 darwin/arm64 windows/amd64; do
+            GOOS=${target%/*} GOARCH=${target#*/} go build ./... || exit 1
+            echo "built $target"
+          done
