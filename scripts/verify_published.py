@@ -320,7 +320,11 @@ def verify_go(version: str | None, work: Path) -> list[Check]:
     if not shutil.which("go"):
         return [Check("go available", False, "go not on PATH")]
 
-    module = "github.com/13Cohen/GeoToolCN/packages/go"
+    # Read from go.mod rather than hard-coding: Go requires the major version in
+    # the module path from v2 onwards, so this string changes at every major
+    # release. Storing a second copy of it here is how the last one went stale.
+    gomod = (REPO / "packages" / "go" / "go.mod").read_text().split("\n")[0]
+    module = gomod.split()[1]
     ref = version or "latest"
     gobin = work / "gobin"
     gobin.mkdir()

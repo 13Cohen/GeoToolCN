@@ -17,7 +17,7 @@ import (
 	"sort"
 	"strings"
 
-	geotoolcn "github.com/13Cohen/GeoToolCN/packages/go"
+	geotoolcn "github.com/13Cohen/GeoToolCN/packages/go/v3"
 )
 
 type request struct {

@@ -7,14 +7,20 @@ Go 版 [GeoToolCN](https://github.com/13Cohen/GeoToolCN) 实现，与 Python、N
 ## 安装
 
 ```bash
-go get github.com/13Cohen/GeoToolCN/packages/go
+go get github.com/13Cohen/GeoToolCN/packages/go/v3
 ```
 
-导入路径带 `packages/go` 是因为本模块位于 monorepo 子目录 —— Go module 从 git 直接解析，
-路径即仓库路径。包名仍是 `geotoolcn`：
+导入路径里的两段后缀各有来历，都不能省：
+
+- `packages/go` —— 本模块位于 monorepo 子目录。Go module 从 git 直接解析，路径即仓库路径。
+- `/v3` —— Go 从主版本 2 起要求导入路径以 `/vN` 结尾。**省掉它不会在 `go build` 或
+  `go test` 时报错**，只有别人从 proxy `go get` 时才会被拒绝，所以本仓库确实先打出过一个
+  这样的无效 tag 才发现。
+
+包名仍是 `geotoolcn`：
 
 ```go
-import geotoolcn "github.com/13Cohen/GeoToolCN/packages/go"
+import geotoolcn "github.com/13Cohen/GeoToolCN/packages/go/v3"
 ```
 
 ## 使用
@@ -25,7 +31,7 @@ package main
 import (
     "fmt"
 
-    geotoolcn "github.com/13Cohen/GeoToolCN/packages/go"
+    geotoolcn "github.com/13Cohen/GeoToolCN/packages/go/v3"
 )
 
 func main() {

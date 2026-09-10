@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	geotoolcn "github.com/13Cohen/GeoToolCN/packages/go"
+	geotoolcn "github.com/13Cohen/GeoToolCN/packages/go/v3"
 )
 
 const usage = `geotoolcn — 中国行政区划离线地理编码

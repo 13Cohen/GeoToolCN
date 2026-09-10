@@ -316,6 +316,13 @@ GeoToolCN/                          （单一 monorepo）
 
 1. 子目录 module 的导入路径必须是 `github.com/13Cohen/GeoToolCN/packages/go`，
    版本 tag 必须写成 `packages/go/v1.0.0`。
+
+   > **修正（发布 v3.0.0 时发现）**：上面这条只对 v0/v1 成立。Go 从主版本 2 起额外要求
+   > 导入路径以 `/vN` 结尾，因此实际路径是 `github.com/13Cohen/GeoToolCN/packages/go/v3`，
+   > 而 tag 仍是 `packages/go/v3.0.0`（tag 前缀是目录，不含 `/v3`）。
+   > 这个疏漏在本地完全不可见 —— `go build`、`go test`、`go vet` 全部通过，连 CI 的
+   > 交叉编译都是绿的，只有从 proxy `go get` 时才会被拒绝。
+   > 它是被 `scripts/verify_published.py` 抓到的，也正是那个脚本存在的理由。
 2. **更关键**：`go:embed` 只能引用模块目录内的文件，且 `go get` 只能拿到 git 里的内容。
    因此 `packages/go/data/china.full.gtc` **必须提交**，成为仓库里唯一一份重复存放的数据。
 
