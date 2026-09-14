@@ -39,6 +39,8 @@ curl 'localhost:8080/reverse?lat=39.9042&lng=116.4074'
 geotoolcn reverse 39.9042 116.4074 | jq -r .district.name
 ```
 
+Every subcommand, HTTP route and exit-code convention: [docs/CLI_EN.md](docs/CLI_EN.md).
+
 ## Quick Start
 
 ### Python
@@ -263,6 +265,11 @@ geo = GeoTool(data_dir="/path/to/china.full.gtc")
 
 About 600 lines plus an adapter. The contract is [SPEC_EN.md](SPEC_EN.md); the steps and
 acceptance checklist are in [PORTING_EN.md](PORTING_EN.md).
+
+## Contributing
+
+The workflow for fixing a bug, changing a behaviour, updating the data or adding a test:
+[CONTRIBUTING_EN.md](CONTRIBUTING_EN.md).
 
 ## License
 

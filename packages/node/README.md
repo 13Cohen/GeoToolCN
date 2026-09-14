@@ -1,5 +1,95 @@
 # @geotoolcn/core
 
+Offline geocoding for Chinese administrative divisions — every province, city and district. **Zero dependencies**, no API key, no network.
+
+The Node.js implementation of [GeoToolCN](https://github.com/13Cohen/GeoToolCN). Shares one data file and one 38,000+-case conformance suite with the Python and Go implementations.
+
+[中文文档在下方 ↓](#中文)
+
+## Install
+
+```bash
+npm install @geotoolcn/core
+```
+
+Node.js ≥ 18. ESM. TypeScript declarations included.
+
+## Usage
+
+```js
+import { reverse, search, getAdministrativeTree } from "@geotoolcn/core";
+
+// Reverse geocoding (coordinates → divisions)
+const r = reverse(39.9042, 116.4074);
+r.province.name;   // 北京市
+r.district.name;   // 东城区
+r.district.code;   // 110101
+
+// Forward search
+search("深圳市");                        // [{ code: "440300", ... }]
+search("朝阳区", { province: "北京市" }); // disambiguate: Beijing and Changchun both have one
+```
+
+The province → city → district tree, for cascader widgets:
+
+```js
+const tree = getAdministrativeTree();
+// [{ value: "110000", label: "北京市", children: [...] }, ...]
+```
+
+Reuse one instance to avoid reloading the data:
+
+```js
+import { GeoTool } from "@geotoolcn/core";
+const geo = new GeoTool();
+```
+
+## API
+
+| Method | Description |
+|--------|-------------|
+| `reverse(lat, lng)` | Coordinate → `{ province, city, district }`; all `null` outside China |
+| `reverseBatch(coords)` | Batch; takes `[[lat, lng], ...]`, output order matches input |
+| `search(query, options?)` | By name or adcode. `options`: `level`, `province`, `city`, `fuzzy` |
+| `listRegions(level)` | Every division at a level, ascending by adcode |
+| `getRegion(code)` | One division by adcode |
+| `lookupAdcode(adcode)` | adcode → the full province / city / district chain |
+| `isInChina(lat, lng)` | Containment |
+| `isInRegion(lat, lng, adcode)` | Containment in one division |
+| `getAdministrativeTree()` | The three-level tree |
+
+Coordinate conversions: `wgs84ToGcj02`, `gcj02ToWgs84`, `gcj02ToBd09`, `bd09ToGcj02`, `wgs84ToBd09`, `bd09ToWgs84`, and `distance`.
+
+> ⚠️ The six conversion functions take **`(lng, lat)` — longitude first** — and return `[lng, lat]`; `distance(lat1, lng1, lat2, lng2)` and every `GeoTool` method take latitude first. Swapping them does not throw: the swapped coordinate falls outside China and is returned unchanged.
+
+## Performance
+
+| Operation | Time |
+|-----------|------|
+| Load data | ~10 ms |
+| One `reverse` | ~1.3 μs |
+| Package size | ~6 MB, boundaries included |
+
+The spatial index is precomputed into the bundled binary at build time: about 77% of lookups hit a table and touch no geometry; the rest average two ray-casting tests.
+
+## Conformance
+
+Passes the **same** 38,000+ conformance cases as the Python and Go implementations, including an identical administrative-tree hash. The contract is [`SPEC_EN.md`](https://github.com/13Cohen/GeoToolCN/blob/master/SPEC_EN.md). After every release the published tarball is installed from npm and run against the suite again.
+
+## Data
+
+[DataV.GeoAtlas](https://datav.aliyun.com/tools/atlas), converted from GCJ-02 to WGS-84. 34 provinces / 363 cities / 2874 districts.
+
+## License
+
+MIT
+
+---
+
+<a id="中文"></a>
+
+# @geotoolcn/core（中文）
+
 中国行政区划离线地理编码，覆盖全部省、市、区县。**零依赖**，无需 API 密钥或网络。
 
 Node.js 上的 [GeoToolCN](https://github.com/13Cohen/GeoToolCN) 实现，与 Python 包共用同一份数据文件与一致性测试集。

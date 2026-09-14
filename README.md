@@ -38,6 +38,8 @@ curl 'localhost:8080/reverse?lat=39.9042&lng=116.4074'
 geotoolcn reverse 39.9042 116.4074 | jq -r .district.name
 ```
 
+全部子命令、HTTP 路由与退出码约定见 [docs/CLI.md](docs/CLI.md)。
+
 ## 快速上手
 
 ### Python
@@ -247,6 +249,10 @@ geo = GeoTool(data_dir="/path/to/china.full.gtc")
 ## 移植到新语言
 
 约 600 行代码加一个适配器。契约见 [SPEC.md](SPEC.md)，步骤与验收清单见 [PORTING.md](PORTING.md)。
+
+## 参与贡献
+
+修 bug、改行为、更新数据、加测试各走什么流程，见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 许可证
 
