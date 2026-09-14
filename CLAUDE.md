@@ -103,7 +103,10 @@ pip install -e .
   because `go get` fetches only what git holds and `go:embed` cannot reach outside the
   module directory
 - `packages/go/cmd/geotoolcn/` — the CLI and HTTP server, covering languages with no
-  binding. Go because it produces one static binary with the dataset inside
+  binding. Go because it produces one static binary with the dataset inside.
+  `main_test.go` builds the binary once and runs every subcommand and route the way a
+  user would; each expectation is computed by calling the library, never written down,
+  so the tests assert only what the CLI can get wrong — argument parsing and JSON shape
 - `PORTING.md` — what to implement, which mutations prove the suite covers your code,
   and the checklist for getting a port merged
 - `SPEC_EN.md` / `PORTING_EN.md` — English translations for contributors who do not read
