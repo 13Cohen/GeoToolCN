@@ -1,4 +1,4 @@
-<!-- translation-of: PORTING.md sha256:657456b04f1d77e82899cb6be523e260751260a9b592f848ecaab1a8ca11c368 -->
+<!-- translation-of: PORTING.md sha256:95c2fad41dd52c65de2d3d82069558273971a9cd0f7bf19c3fde1c663151cc37 -->
 
 # Porting to a new language
 
@@ -83,9 +83,16 @@ tiny: one JSON request per line on stdin, one JSON response per line on stdout.
 <- {"error":"invalid adcode"}
 ```
 
-Ops to support: `reverse`, `lookup_adcode`, `search`, `is_in_china`,
-`is_in_region`, `distance`, `tree_sha256`, and the six coordinate conversions
-(snake_case op names, e.g. `wgs84_to_gcj02`).
+Ops to support: `reverse`, `reverse_batch`, `lookup_adcode`, `search`,
+`list_regions`, `get_region`, `is_in_china`, `is_in_region`, `distance`,
+`tree_sha256`, and the six coordinate conversions (snake_case op names, e.g.
+`wgs84_to_gcj02`). **That is the entire public API of SPEC §2.** The suite once
+omitted `reverse_batch`, `list_regions` and `get_region`: all three ports had
+implemented them and passed their own unit tests, and nothing guaranteed they
+agreed with each other.
+
+`list_regions` and `get_region` serialise a Region as
+`[code, name, level, latitude, longitude]`.
 
 ⚠️ Beware "omit empty" serialisation: Go's `omitempty` and similar defaults
 swallow `false` and empty arrays, turning `is_in_china=false` into a missing
@@ -97,7 +104,7 @@ field.
 python conformance/run.py --adapter cmd --cmd "<your adapter command>"
 ```
 
-35,000+ cases, and **all of them must pass**. Failures are grouped by tag,
+38,000+ cases, and **all of them must pass**. Failures are grouped by tag,
 because a port is usually wrong about a whole category of input — boundaries,
 municipalities — rather than about scattered points.
 
@@ -112,6 +119,9 @@ faults deliberately and confirm the suite catches them:
 | Grid cell `floor` → `round` | 560 fail |
 | Substring → prefix matching | 177 fail |
 | Search result order reversed | 70 fail |
+| `get_region` search order reversed (district before province) | 34 fail — exactly the 34 adcodes present at both city and district level |
+| `list_regions` returning `[]` for an invalid level instead of an error | 6 fail |
+| `reverse_batch` order reversed | 4 fail |
 
 If your implementation survives any of these, the suite is not covering that
 part of your code — tell us, because that is a gap in the suite.
@@ -144,7 +154,7 @@ To have an implementation merged and listed in the docs:
 
 ```
 □ Implements the full API contract in SPEC §2
-□ Passes 100% of the 35,000+ conformance cases
+□ Passes 100% of the 38,000+ conformance cases
 □ Adapter lives in conformance/adapters/
 □ A row added to conformance-matrix in .github/workflows/test.yml
 □ Unit tests in the language's idiomatic framework (these do not replace

@@ -20,9 +20,9 @@ import (
 var Levels = [3]string{"province", "city", "district"}
 
 const (
-	magic                 = 0x4e435447 // "GTCN" little-endian
+	magic                  = 0x4e435447 // "GTCN" little-endian
 	supportedFormatVersion = 1
-	metaRecordSize        = 28
+	metaRecordSize         = 28
 )
 
 const (

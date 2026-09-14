@@ -450,6 +450,111 @@ def main() -> None:
         idx += 1
     n_containment = write_jsonl("containment.jsonl", rows)
 
+    # ---------------- regions.jsonl ----------------
+    # list_regions, get_region and reverse_batch. All three were implemented in
+    # every port and none was in the suite: three independent implementations
+    # that could each pass their own unit tests while disagreeing with each
+    # other, which is the exact failure the suite exists to rule out.
+    def region_row(r):
+        return [r.code, r.name, r.level, r.latitude, r.longitude] if r else None
+
+    rows = []
+    idx = 0
+    for level in ("province", "city", "district"):
+        rows.append(
+            {
+                "id": f"lst-{idx:06d}",
+                "tags": ["list_regions", level],
+                "fn": "list_regions",
+                "in": [level],
+                # SPEC §2.5: the whole level, ascending by adcode. Order is part
+                # of the contract, so the expected value is the full sequence.
+                "out": [region_row(r) for r in geo.list_regions(level)],
+            }
+        )
+        idx += 1
+    for bad in ["", "country", "PROVINCE", "town", "省", "districts"]:
+        rows.append(
+            {
+                "id": f"lst-{idx:06d}",
+                "tags": ["list_regions", "invalid"],
+                "fn": "list_regions",
+                "in": [bad],
+                "out": "error",
+            }
+        )
+        idx += 1
+
+    # SPEC §2.6: province → city → district, first hit wins. The municipality
+    # codes exist at two levels and the city-and-district codes at two others,
+    # so which one comes back is the whole test.
+    code_levels: dict[str, list[str]] = {}
+    for r in all_regions:
+        code_levels.setdefault(r.code, []).append(r.level)
+    seen: set[str] = set()
+    for r in all_regions:
+        if r.code in seen:
+            continue
+        seen.add(r.code)
+        tags = ["get_region", r.level]
+        if len(code_levels[r.code]) > 1:
+            # Which level wins is the assertion; the tag names the contenders.
+            tags += ["multi-level", "+".join(code_levels[r.code])]
+        rows.append(
+            {
+                "id": f"reg-{idx:06d}",
+                "tags": tags,
+                "fn": "get_region",
+                "in": [r.code],
+                "out": region_row(geo.get_region(r.code)),
+            }
+        )
+        idx += 1
+    for bad in ["", "000000", "999999", "11", "1100", "11010a", "110101 ", "abcdef"]:
+        rows.append(
+            {
+                "id": f"reg-{idx:06d}",
+                "tags": ["get_region", "invalid"],
+                "fn": "get_region",
+                "in": [bad],
+                "out": None,
+            }
+        )
+        idx += 1
+
+    # SPEC §2.2: element-wise reverse, empty in → empty out, order preserved.
+    inside = [(r.latitude, r.longitude) for r in rng.sample(districts, 40)]
+    outside = [(lat, lng) for lat, lng, _ in OUTSIDE_POINTS]
+    mixed = []
+    for i in range(max(len(inside), len(outside))):
+        if i < len(inside):
+            mixed.append(inside[i])
+        if i < len(outside):
+            mixed.append(outside[i])
+    batches = [
+        ([], ["empty"]),
+        ([inside[0]], ["single"]),
+        (inside[:10], ["inside"]),
+        (outside, ["outside"]),
+        (mixed, ["mixed"]),
+        (list(reversed(mixed)), ["mixed", "reversed"]),
+        ([inside[0]] * 5, ["duplicates"]),
+        (inside + outside + inside, ["large"]),
+    ]
+    for coords, tags in batches:
+        coords = [[lat, lng] for lat, lng in coords]
+        rows.append(
+            {
+                "id": f"bat-{idx:06d}",
+                "tags": ["reverse_batch", *tags],
+                "fn": "reverse_batch",
+                "in": [coords],
+                "out": [region_codes(r) for r in geo.reverse_batch(coords)],
+            }
+        )
+        idx += 1
+    n_regions = write_jsonl("regions.jsonl", rows)
+
     # ---------------- tree.json ----------------
     tree = get_administrative_tree()
     canonical = json.dumps(tree, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -475,13 +580,14 @@ def main() -> None:
             "search": n_search,
             "coords": n_coords,
             "containment": n_containment,
+            "regions": n_regions,
         },
         "tree_sha256": digest,
     }
     (OUT_DIR / "manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
-    total = n_reverse + n_lookup + n_search + n_coords + n_containment
+    total = n_reverse + n_lookup + n_search + n_coords + n_containment + n_regions
     print(f"\n共 {total:,} 条用例。")
 
     if temp_dir is not None:

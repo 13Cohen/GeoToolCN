@@ -62,7 +62,13 @@
 <- {"error":"invalid adcode"}
 ```
 
-需要支持的 `op`：`reverse`、`lookup_adcode`、`search`、`is_in_china`、`is_in_region`、`distance`、`tree_sha256`，以及六个坐标转换函数（op 名用蛇形，如 `wgs84_to_gcj02`）。
+需要支持的 `op`：`reverse`、`reverse_batch`、`lookup_adcode`、`search`、`list_regions`、
+`get_region`、`is_in_china`、`is_in_region`、`distance`、`tree_sha256`，以及六个坐标转换函数
+（op 名用蛇形，如 `wgs84_to_gcj02`）。**这就是 SPEC §2 的全部公开 API** —— 套件曾经漏掉
+前三个里的 `reverse_batch`、`list_regions`、`get_region`，三个实现各自写了、各自通过了
+单元测试，却没有任何东西保证它们彼此一致。
+
+`list_regions` 与 `get_region` 返回的 Region 序列化为 `[code, name, level, latitude, longitude]`。
 
 ⚠️ 序列化时小心「空值省略」：Go 的 `omitempty`、某些语言的默认行为会吞掉 `false` 和空数组，让 `is_in_china=false` 变成字段缺失。
 
@@ -72,7 +78,7 @@
 python conformance/run.py --adapter cmd --cmd "<你的适配器命令>"
 ```
 
-35,000+ 条用例，**必须全过**。失败会按标签分组，因为移植出错通常是错一整类输入（边界、直辖市），而不是零散的点。
+38,000+ 条用例，**必须全过**。失败会按标签分组，因为移植出错通常是错一整类输入（边界、直辖市），而不是零散的点。
 
 ## 怎么证明你做对了
 
@@ -84,6 +90,9 @@ python conformance/run.py --adapter cmd --cmd "<你的适配器命令>"
 | 网格 `floor` 改 `round` | 失败 560 条 |
 | 子串匹配改前缀匹配 | 失败 177 条 |
 | 搜索结果排序反向 | 失败 70 条 |
+| `get_region` 搜索顺序反向（district 先于 province） | 失败 34 条 —— 恰好是 34 个同时存在于 city 与 district 层的 adcode |
+| `list_regions` 非法 level 返回空而非报错 | 失败 6 条 |
+| `reverse_batch` 顺序反向 | 失败 4 条 |
 
 若你的实现能通过其中任何一项变异，说明套件没有覆盖到你的那部分代码 —— 请告诉我们，这是套件的缺口。
 
@@ -109,7 +118,7 @@ Go 的 `json:"children,omitempty"` 会把空数组一并丢掉，需要自定义
 
 ```
 □ 实现 SPEC §2 的完整 API 契约
-□ conformance 35,000+ 条用例 100% 通过
+□ conformance 38,000+ 条用例 100% 通过
 □ 适配器放在 conformance/adapters/
 □ 在 .github/workflows/test.yml 的 conformance-matrix 中加一行
 □ 该语言生态惯用的单元测试（不替代一致性测试）

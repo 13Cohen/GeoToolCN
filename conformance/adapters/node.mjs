@@ -38,6 +38,9 @@ const CONVERSIONS = {
   bd09_to_wgs84: bd09ToWgs84,
 };
 
+const region = (r) =>
+  r ? [r.code, r.name, r.level, r.latitude, r.longitude] : null;
+
 const chain = (result) =>
   result === null
     ? null
@@ -72,6 +75,12 @@ function handle(op, args) {
       return geo.isInRegion(args[0], args[1], args[2]);
     case "distance":
       return distance(args[0], args[1], args[2], args[3]);
+    case "list_regions":
+      return geo.listRegions(args[0]).map(region);
+    case "get_region":
+      return region(geo.getRegion(args[0]));
+    case "reverse_batch":
+      return geo.reverseBatch(args[0]).map(chain);
     case "tree_sha256":
       return createHash("sha256")
         .update(canonical(getAdministrativeTree()), "utf-8")

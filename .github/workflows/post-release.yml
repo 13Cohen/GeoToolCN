@@ -6,7 +6,7 @@ name: Post-release
 # pre-release check can see. 3.0.0rc1 passed all twelve of them and then
 # reported itself as 2.1.0 once installed.
 #
-# This installs each ecosystem the way a user does, then runs the same 35k
+# This installs each ecosystem the way a user does, then runs the same 38k
 # conformance suite against it.
 
 on:

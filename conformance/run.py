@@ -145,9 +145,19 @@ class PythonAdapter:
                 return geo.is_in_region(*args)
             if op == "distance":
                 return self._coords.distance(*args)
+            if op == "list_regions":
+                return [self._region(r) for r in geo.list_regions(*args)]
+            if op == "get_region":
+                return self._region(geo.get_region(*args))
+            if op == "reverse_batch":
+                return [self._chain(r) for r in geo.reverse_batch(*args)]
             return list(getattr(self._coords, op)(*args))
         except Exception as exc:  # noqa: BLE001 - the suite asserts on failures too
             return {"__error__": str(exc)}
+
+    @staticmethod
+    def _region(r):
+        return [r.code, r.name, r.level, r.latitude, r.longitude] if r else None
 
     @staticmethod
     def _chain(result):
@@ -203,6 +213,18 @@ def close_enough(got, want, tolerance: float) -> bool:
     if isinstance(want, list) and isinstance(got, list) and len(want) == len(got):
         return all(close_enough(g, w, tolerance) for g, w in zip(got, want))
     return False
+
+
+def region_matches(got, want) -> bool:
+    """A serialised Region: code, name and level exactly; the coordinates within
+    tolerance. All ports divide the stored integer by 1e6, which IEEE 754 makes
+    bit-identical, but a port that multiplied by 1e-6 instead would be off in
+    the last place and still correct."""
+    if want is None:
+        return got is None
+    if not isinstance(got, list) or len(got) != 5:
+        return False
+    return got[:3] == want[:3] and close_enough(got[3:], want[3:], COORD_TOLERANCE_DEG)
 
 
 class Report:
@@ -265,6 +287,23 @@ def run_suite(adapter, report: Report) -> None:
         else:
             ok = got == case["out"]
         report.record(case, got, case["out"], ok)
+
+    for case in load("regions.jsonl"):
+        got = adapter.call(case["fn"], case["in"])
+        want = case["out"]
+        if want == "error":
+            ok = is_error(got)
+            got = "error" if ok else got
+        elif case["fn"] == "list_regions":
+            ok = (isinstance(got, list) and len(got) == len(want)
+                  and all(region_matches(g, w) for g, w in zip(got, want)))
+            if not ok and isinstance(got, list):
+                got = f"<{len(got)} regions>"       # the full list is not a useful diff
+        elif case["fn"] == "get_region":
+            ok = region_matches(got, want)
+        else:                                       # reverse_batch: exact chains
+            ok = got == want
+        report.record(case, got, want, ok)
 
     tree_expected = (SUITE_DIR / "tree.sha256").read_text(encoding="utf-8").strip()
     got_tree = adapter.call("tree_sha256", [])
