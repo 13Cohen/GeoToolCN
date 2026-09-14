@@ -111,9 +111,6 @@ export class GTCData {
     this.gridWidth = view.getUint16(28, true);
     this.gridHeight = view.getUint16(30, true);
     this.scale = 10 ** this.precision;
-    if (!(this.gridStep > 0)) {
-      throw new GTCFormatError("grid step must be positive");
-    }
 
     const size = bytes.byteLength;
     if (HEADER_SIZE + SECTION_ENTRY_SIZE * sectionCount > size) {
@@ -159,6 +156,9 @@ export class GTCData {
     this.hasGeometry = geom.length > 0;
     this.geomIndex = this.#u32(SECTION_GEOM_INDEX);
     if (this.hasGeometry) {
+      // The mini tier writes a zero grid step along with its empty grid;
+      // only a tier that will be searched needs a real one.
+      if (!(this.gridStep > 0)) throw new GTCFormatError("grid step must be positive");
       if (this.geomIndex.length !== this.recordCount + 1) {
         throw new GTCFormatError(
           `GEOM_INDEX has ${this.geomIndex.length} entries, expected ${this.recordCount + 1}`,

@@ -130,9 +130,6 @@ class GTCData:
                 f"format version {format_version} is not supported "
                 f"(this build reads version {SUPPORTED_FORMAT_VERSION})"
             )
-        if grid_step <= 0:
-            raise GTCFormatError("grid step must be positive")
-
         self.scale = 10 ** self.precision
         self.origin_lng = origin_lng / 1_000_000
         self.origin_lat = origin_lat / 1_000_000
@@ -174,6 +171,10 @@ class GTCData:
         self._geom_index = _u32_array(sections[SECTION_GEOM_INDEX])
         self.has_geometry = len(self._geom) > 0
         if self.has_geometry:
+            # The mini tier writes a zero grid step along with its empty
+            # grid; only a tier that will be searched needs a real one.
+            if grid_step <= 0:
+                raise GTCFormatError("grid step must be positive")
             if len(self._geom_index) != self.record_count + 1:
                 raise GTCFormatError(
                     f"GEOM_INDEX has {len(self._geom_index)} entries, "

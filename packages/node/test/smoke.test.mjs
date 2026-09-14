@@ -142,8 +142,10 @@ test("a dataset with no geometry still answers name lookups", async () => {
   const { readFileSync } = await import("node:fs");
   const { GTCData, GeometryUnavailable } = await import("../src/gtc.js");
   const raw = new Uint8Array(readFileSync(new URL("../data/china.full.gtc", import.meta.url)));
-  // Zero the GEOM section's length in the section table (kind 3).
+  // Zero the GEOM section's length (kind 3) and the grid step, as a real
+  // mini build writes them.
   const view = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
+  view.setUint32(24, 0, true);
   const sectionCount = view.getUint16(12, true);
   for (let i = 0; i < sectionCount; i += 1) {
     const base = 32 + 24 * i;

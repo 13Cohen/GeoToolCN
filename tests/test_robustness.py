@@ -162,7 +162,11 @@ class TestResourceHandling:
 
 
 def _with_geom_length(raw: bytes, length: int) -> bytes:
-    """Rewrite the GEOM section's length in the section table."""
+    """Rewrite the GEOM section's length in the section table.
+
+    With ``length=0`` this also zeroes the grid step, which is what a real
+    ``mini`` build writes — the reader must accept that combination.
+    """
     from GeoToolCN._gtc import SECTION_GEOM
 
     out = bytearray(raw)
@@ -171,6 +175,8 @@ def _with_geom_length(raw: bytes, length: int) -> bytes:
         base = 32 + 24 * i
         if struct.unpack_from("<H", raw, base)[0] == SECTION_GEOM:
             struct.pack_into("<Q", out, base + 16, length)
+    if length == 0:
+        struct.pack_into("<I", out, 24, 0)
     return bytes(out)
 
 

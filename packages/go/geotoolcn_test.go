@@ -301,11 +301,11 @@ func TestTruncatedFileIsAFormatError(t *testing.T) {
 }
 
 func TestNoGeometryPanicsWithErrNoGeometry(t *testing.T) {
-	// Build a "mini" view of the embedded file: same sections, GEOM emptied.
-	// The section table carries (offset, length) per section, so zeroing the
-	// GEOM length is enough — the reader takes len(geomBlob) == 0 as the
-	// no-geometry marker (SPEC §4.1).
+	// Build a "mini" view of the embedded file: same sections, GEOM emptied,
+	// grid step zeroed — both as a real mini build writes them. The reader
+	// takes len(geomBlob) == 0 as the no-geometry marker (SPEC §4.1).
 	raw := append([]byte(nil), embeddedDataset...)
+	binary.LittleEndian.PutUint32(raw[24:], 0)
 	sectionCount := int(binary.LittleEndian.Uint16(raw[12:]))
 	for i := 0; i < sectionCount; i++ {
 		base := 32 + 24*i

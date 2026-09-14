@@ -136,9 +136,6 @@ func newGTCData(raw []byte) (*gtcData, error) {
 	d.gridStep = float64(binary.LittleEndian.Uint32(raw[24:])) / 1e6
 	d.gridWidth = int(binary.LittleEndian.Uint16(raw[28:]))
 	d.gridHeight = int(binary.LittleEndian.Uint16(raw[30:]))
-	if d.gridStep <= 0 {
-		return nil, &FormatError{"grid step must be positive"}
-	}
 
 	// Every offset below comes from the file, so each is checked before it
 	// is used: a truncated or corrupt file must surface as a FormatError,
@@ -185,6 +182,11 @@ func newGTCData(raw []byte) (*gtcData, error) {
 	d.hasGeometry = len(d.geomBlob) > 0
 	d.geomIndex = u32Slice(sections[sectionGeomIndex])
 	if d.hasGeometry {
+		// The mini tier writes a zero grid step along with its empty grid;
+		// only a tier that will be searched needs a real one.
+		if d.gridStep <= 0 {
+			return nil, &FormatError{"grid step must be positive"}
+		}
 		if len(d.geomIndex) != recordCount+1 {
 			return nil, &FormatError{fmt.Sprintf(
 				"GEOM_INDEX has %d entries, expected %d", len(d.geomIndex), recordCount+1)}
