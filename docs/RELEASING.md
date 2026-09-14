@@ -94,7 +94,7 @@ python scripts/verify_published.py --only node
 python scripts/verify_published.py --only python --version 3.0.0rc1
 ```
 
-它从各自的包仓库安装，然后对**装下来的东西**跑那 35,086 条 conformance。每一项检查都会先断言
+它从各自的包仓库安装，然后对**装下来的东西**跑那 38,000+ 条 conformance。每一项检查都会先断言
 被测产物解析到仓库目录之外 —— 否则它不过是换个方式再测一遍源码。
 
 自动运行的三个时机（`.github/workflows/post-release.yml`）：

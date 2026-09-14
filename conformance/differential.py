@@ -2,7 +2,7 @@
 
     python conformance/differential.py -n 1000000
 
-The golden suite pins ~35k specific cases; this catches what nobody thought to
+The golden suite pins ~38k specific cases; this catches what nobody thought to
 pin.  Every difference must match an entry in ``known-divergences.yaml`` —
 anything else is a regression.
 

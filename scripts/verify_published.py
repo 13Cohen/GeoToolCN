@@ -88,7 +88,7 @@ def parse_version(text: str) -> tuple[int, ...]:
 
 
 def conformance(adapter_cmd: str, env=None) -> Check:
-    """Run all 35k cases against an adapter that speaks the line protocol."""
+    """Run all 38k cases against an adapter that speaks the line protocol."""
     proc = run(
         [sys.executable, str(REPO / "conformance" / "run.py"),
          "--adapter", "cmd", "--cmd", adapter_cmd],
@@ -326,33 +326,54 @@ def verify_go(version: str | None, work: Path) -> list[Check]:
     gomod = (REPO / "packages" / "go" / "go.mod").read_text().split("\n")[0]
     module = gomod.split()[1]
     ref = version or "latest"
-    gobin = work / "gobin"
-    gobin.mkdir()
     env = {
-        "GOBIN": str(gobin),
         "GOPATH": str(work / "gopath"),
+        "GOMODCACHE": str(work / "modcache"),
         "CGO_ENABLED": "0",
         "GOFLAGS": "-mod=mod",
     }
 
-    # Building the adapter straight from the proxy is the strongest form of
-    # this check: it fails if the dataset was not committed, because go:embed
-    # resolves against what the module server serves, not what a clone builds.
-    proc = run(["go", "install", f"{module}/cmd/conformance-adapter@{ref}"],
-               cwd=work, env=env)
-    if proc.returncode != 0:
-        return [Check(f"go install {module}/cmd/conformance-adapter@{ref}", False,
-                      proc.stderr.strip()[-600:])]
-    checks.append(Check(f"go install ...@{ref}", True))
+    # The adapter is the test harness and comes from this checkout, so it knows
+    # every op the current suite sends. The library it imports comes from the
+    # proxy. Building the published adapter instead (`go install ...@vX`) would
+    # pin the harness to whatever ops existed at release time — and it did:
+    # the suite gained list_regions, get_region and reverse_batch after 3.0.0.
+    #
+    # The library still has to build from what the proxy serves, which is the
+    # check that matters for Go: go:embed resolves against the module zip, so
+    # a dataset that was not committed fails here and nowhere else.
+    proj = work / "harness"
+    proj.mkdir()
+    (proj / "go.mod").write_text(
+        f"module verify\n\ngo 1.21\n\nrequire {module} {ref}\n"
+        if ref != "latest" else f"module verify\n\ngo 1.21\n"
+    )
+    src = REPO / "packages" / "go" / "cmd" / "conformance-adapter" / "main.go"
+    (proj / "main.go").write_text(src.read_text())
 
-    adapter = gobin / "conformance-adapter"
-    checks.append(outside_repo(adapter, "the compiled adapter"))
-    checks.append(Check("adapter binary produced", adapter.exists()))
+    fetch = run(["go", "get", f"{module}@{ref}"], cwd=proj, env=env)
+    if fetch.returncode != 0:
+        return [Check(f"go get {module}@{ref}", False, fetch.stderr.strip()[-600:])]
+    checks.append(Check(f"go get {module}@{ref}", True))
 
     # Which version the proxy actually resolved — `latest` is otherwise opaque.
-    listing = run(["go", "list", "-m", f"{module}@{ref}"], cwd=work, env=env)
+    listing = run(["go", "list", "-m", module], cwd=proj, env=env)
     resolved = listing.stdout.strip().split()[-1] if listing.returncode == 0 else ref
     checks.append(Check("resolved from the module proxy", listing.returncode == 0, resolved))
+
+    # Where the library actually came from. The module cache is under `work`,
+    # so this both proves it is not the checkout and that the proxy served it.
+    where = run(["go", "list", "-m", "-f", "{{.Dir}}", module], cwd=proj, env=env)
+    libdir = Path(where.stdout.strip()) if where.returncode == 0 else REPO
+    checks.append(outside_repo(libdir, "the Go library"))
+
+    adapter = work / "conformance-adapter"
+    build = run(["go", "build", "-o", str(adapter), "."], cwd=proj, env=env)
+    if build.returncode != 0:
+        checks.append(Check("build the harness against the published library", False,
+                            build.stderr.strip()[-600:]))
+        return checks
+    checks.append(Check("build the harness against the published library", True))
 
     # Go needs no publish step, so the module resolves as soon as a commit
     # exists — but until a packages/go/v* tag lands, `go get` hands users a

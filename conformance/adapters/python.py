@@ -43,6 +43,10 @@ def _chain(result):
     ]
 
 
+def _region(r):
+    return [r.code, r.name, r.level, r.latitude, r.longitude] if r else None
+
+
 def _handle(op: str, args: list):
     if op == "reverse":
         return _chain(_geo.reverse(*args))
@@ -57,6 +61,12 @@ def _handle(op: str, args: list):
         return _geo.is_in_region(*args)
     if op == "distance":
         return coords.distance(*args)
+    if op == "list_regions":
+        return [_region(r) for r in _geo.list_regions(*args)]
+    if op == "get_region":
+        return _region(_geo.get_region(*args))
+    if op == "reverse_batch":
+        return [_chain(r) for r in _geo.reverse_batch(*args)]
     if op == "tree_sha256":
         # SPEC §1.3: keys sorted, no whitespace, non-ASCII left unescaped.
         canonical = json.dumps(

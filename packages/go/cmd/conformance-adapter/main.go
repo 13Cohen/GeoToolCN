@@ -41,6 +41,13 @@ var conversions = map[string]func(float64, float64) (float64, float64){
 	"bd09_to_wgs84":  geotoolcn.BD09ToWGS84,
 }
 
+func region(r *geotoolcn.Region) any {
+	if r == nil {
+		return nil
+	}
+	return []any{r.Code, r.Name, r.Level, r.Latitude, r.Longitude}
+}
+
 func chain(r *geotoolcn.ReverseResult) []any {
 	code := func(x *geotoolcn.Region) any {
 		if x == nil {
@@ -132,6 +139,29 @@ func handle(geo *geotoolcn.GeoTool, req request) (any, error) {
 		return geo.IsInRegion(num(0), num(1), str(2))
 	case "distance":
 		return geotoolcn.Distance(num(0), num(1), num(2), num(3)), nil
+	case "list_regions":
+		regions, err := geo.ListRegions(str(0))
+		if err != nil {
+			return nil, err
+		}
+		out := make([]any, len(regions))
+		for i, r := range regions {
+			out[i] = region(r)
+		}
+		return out, nil
+	case "get_region":
+		return region(geo.GetRegion(str(0))), nil
+	case "reverse_batch":
+		var coords [][2]float64
+		if err := json.Unmarshal(req.Args[0], &coords); err != nil {
+			return nil, err
+		}
+		results := geo.ReverseBatch(coords)
+		out := make([]any, len(results))
+		for i := range results {
+			out[i] = chain(&results[i])
+		}
+		return out, nil
 	case "tree_sha256":
 		tree, err := geotoolcn.GetAdministrativeTree()
 		if err != nil {
