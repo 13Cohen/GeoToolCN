@@ -1,4 +1,129 @@
-# geotoolcn-go
+# geotoolcn (Go)
+
+Offline geocoding for Chinese administrative divisions — every province, city and district. **Pure Go, no cgo, zero dependencies**, data embedded.
+
+The Go implementation of [GeoToolCN](https://github.com/13Cohen/GeoToolCN). Shares one data file and one 38,000+-case conformance suite with the Python and Node implementations.
+
+[中文文档在下方 ↓](#中文)
+
+## Install
+
+```bash
+go get github.com/13Cohen/GeoToolCN/packages/go/v3
+```
+
+Both suffixes in the import path are mandatory and have different origins:
+
+- `packages/go` — the module lives in a subdirectory of a monorepo. Go resolves modules straight from git, so the path is the repository path.
+- `/v3` — Go requires the import path to end in `/vN` from major version 2 onwards. **Omitting it does not fail `go build` or `go test`** — only other people's `go get` from the proxy rejects it, which is how this repository came to tag an unfetchable release once.
+
+The package name is still `geotoolcn`:
+
+```go
+import geotoolcn "github.com/13Cohen/GeoToolCN/packages/go/v3"
+```
+
+## Usage
+
+```go
+package main
+
+import (
+    "fmt"
+
+    geotoolcn "github.com/13Cohen/GeoToolCN/packages/go/v3"
+)
+
+func main() {
+    geo, err := geotoolcn.New()
+    if err != nil {
+        panic(err)
+    }
+
+    r := geo.Reverse(39.9042, 116.4074)
+    fmt.Println(r.Province.Name, r.District.Name) // 北京市 东城区
+
+    // Disambiguate same-named divisions
+    found := geo.Search("朝阳区", geotoolcn.SearchOptions{Province: "北京市"})
+    fmt.Println(found[0].Code) // 110105
+
+    tree, _ := geotoolcn.GetAdministrativeTree()
+    fmt.Println(len(tree)) // 34
+}
+```
+
+A `GeoTool` is safe for concurrent reads once `New` returns, but `Reverse` decodes geometry lazily — under heavy concurrency, hold one instance per goroutine or add your own lock.
+
+## API
+
+| Method | Description |
+|--------|-------------|
+| `New()` / `Open(path)` | Embedded data / an external `.gtc` |
+| `Reverse(lat, lng)` | Coordinate → `ReverseResult{Province, City, District}`; all nil outside China |
+| `ReverseBatch(coords)` | Batch; takes `[][2]float64{{lat, lng}, ...}` |
+| `Search(query, opts)` | By name or adcode |
+| `ListRegions(level)` | Every division at a level, ascending by adcode; error on an invalid level |
+| `GetRegion(code)` | One division by adcode |
+| `LookupAdcode(adcode)` | adcode → the full chain |
+| `IsInChina(lat, lng)` | Containment |
+| `IsInRegion(lat, lng, adcode)` | Containment in one division; error if the adcode is invalid or unknown |
+| `GetAdministrativeTree()` | The three-level tree |
+
+Coordinate conversions: `WGS84ToGCJ02`, `GCJ02ToWGS84`, `GCJ02ToBD09`, `BD09ToGCJ02`, `WGS84ToBD09`, `BD09ToWGS84`, and `Distance`.
+
+> ⚠️ The six conversion functions take **`(lng, lat)` — longitude first**; `Distance(lat1, lng1, lat2, lng2)` and every `GeoTool` method take latitude first. Swapping them does not error: the swapped coordinate falls outside China and is returned unchanged.
+
+The zero value of `SearchOptions` means "every level, fuzzy on". `NoFuzzy` is named in the negative precisely so the zero value matches the other implementations' `fuzzy=true` default.
+
+## Performance
+
+| Operation | Time |
+|-----------|------|
+| `New()` | ~30 ms |
+| One `Reverse` | **155 ns** |
+| Binary size | ~9.7 MB, boundaries included |
+
+The spatial index is precomputed into the embedded binary at build time: about 77% of lookups hit a table and touch no geometry; the rest average two ray-casting tests.
+
+## Cross-compilation
+
+No cgo, so it cross-compiles with `CGO_ENABLED=0`:
+
+```bash
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build ./...
+```
+
+## Conformance
+
+Passes the **same** 38,000+ conformance cases as the Python and Node implementations, including an identical administrative-tree hash. The contract is [`SPEC_EN.md`](https://github.com/13Cohen/GeoToolCN/blob/master/SPEC_EN.md). After every release the module is fetched from the proxy and run against the suite again.
+
+## Versioning
+
+A release is a tag — there is no registry to upload to; the Go proxy resolves git tags directly. For a module in a subdirectory Go dictates the tag shape:
+
+```
+packages/go/v3.0.0
+```
+
+`data/china.full.gtc` is **committed** because `go get` fetches only what git holds and `go:embed` cannot reach outside the module directory. It is the one duplicated copy of the dataset in the repository.
+
+## CLI and HTTP server
+
+`cmd/geotoolcn` in this module is a static binary exposing the same API as subcommands and as an HTTP service, for languages with no binding. See [docs/CLI_EN.md](https://github.com/13Cohen/GeoToolCN/blob/master/docs/CLI_EN.md).
+
+## Data
+
+[DataV.GeoAtlas](https://datav.aliyun.com/tools/atlas), converted from GCJ-02 to WGS-84. 34 provinces / 363 cities / 2874 districts.
+
+## License
+
+MIT
+
+---
+
+<a id="中文"></a>
+
+# geotoolcn (Go)（中文）
 
 中国行政区划离线地理编码，覆盖全部省、市、区县。**纯 Go，无 cgo，零依赖**，数据内嵌。
 

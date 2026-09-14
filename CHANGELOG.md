@@ -2,14 +2,25 @@
 
 本文件记录 GeoToolCN 的重要变更。版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [3.0.0] — 2026-09-09
+## [3.0.0] — 2026-09-10
 
-移除 geopandas 与 shapely 依赖。空间索引改为构建期预计算进一个二进制数据文件，
-运行时只需查表加少量射线法判定。**公开 API 没有增删。**
+两件事：**Python 实现移除了 geopandas 与 shapely**，以及**同一套能力现在有了 Node.js、Go
+和 CLI 三种额外形态**，全部读同一份数据文件，通过同一套 38,000+ 条一致性用例。
 
-升级指南见 [MIGRATION_v3.md](MIGRATION_v3.md)。
+Python 的公开 API 没有增删。升级指南见 [MIGRATION_v3.md](MIGRATION_v3.md)。
 
-### 变更
+### 新增：多语言实现
+
+| 生态 | 安装 | 说明 |
+|------|------|------|
+| Node.js / TypeScript | `npm install @geotoolcn/core` | ESM，零依赖，自带 `.d.ts`；Node 18+ |
+| Go | `go get github.com/13Cohen/GeoToolCN/packages/go/v3` | 无 cgo，数据 `go:embed`，`CGO_ENABLED=0` 可交叉编译 |
+| CLI / HTTP | GitHub Releases 五平台二进制；`ghcr.io/13cohen/geotoolcn` 镜像（amd64 / arm64） | 覆盖没有绑定的语言。用法见 [docs/CLI.md](docs/CLI.md) |
+
+三种实现的 API 一一对应（Node 用驼峰，Go 用大写方法名），语义由 [SPEC.md](SPEC.md) 统一规定，
+每种实现约 600 行标准库代码。移植到新语言的步骤与验收清单见 [PORTING.md](PORTING.md)。
+
+### 变更：Python 实现
 
 | 指标 | v2.1.0 | v3.0.0 |
 |------|--------|--------|
@@ -20,6 +31,9 @@
 | 单次 `reverse` | ~250 μs | **~5 μs** |
 | 常驻内存 | ~170 MB | **~30 MB** |
 
+空间索引改为构建期预计算进一个二进制数据文件（`.gtc`）：约 77% 的查询直接命中查找表、
+零几何运算，其余平均只需对 2 个多边形做射线法判定。
+
 - **`data_dir` 参数**现在接受 `.gtc` 文件路径或含 `china.full.gtc` 的目录，不再接受
   装有 GeoJSON 的目录。绝大多数用户不传该参数，不受影响。
 
@@ -29,6 +43,9 @@
 
 - **边界附近的归属可能变化。** 坐标量化到 1e-5 度（约 1.11 米）。实测 16,509 个反查
   用例中 10 条（0.061%）变化，全部距争议边界 0.019 ~ 0.460 米。
+
+- **`__version__` 改为从已安装的包元数据读取**，不再是源码里的字面量。此前的字面量与
+  `pyproject.toml` 已经不一致，第一个候选版本 `3.0.0rc1` 装下来报告自己是 `2.1.0`。
 
 - `GeoTool._levels`、`.gdf` 等私有属性随 geopandas 一并移除。
 
@@ -44,12 +61,38 @@
 - **重叠区县的归属定序。** 部分区县多边形彼此重叠，v2 取空间索引的返回顺序，
   结果依赖 GEOS 内部实现、可能随库升级漂移。现按 adcode 升序取第一个。
 
-### 新增
+- **README 里的 Python 示例自 1.0.0 起就无法运行。** 每个示例都写 `from geotool_cn import`，
+  而包一直只能 `import GeoToolCN`。已修正，并新增测试逐块执行 README 里的全部示例。
 
-- `SPEC.md` — 跨语言契约：API 语义、歧义规则、`.gtc` 二进制格式
-- `conformance/` — 约 3.5 万条语言中立用例，任何语言的实现都必须通过
-- `pipeline/build_gtc.py` — 从 GeoJSON 构建 `.gtc`
+### 新增：契约与测试
+
+- `SPEC.md` / `SPEC_EN.md` — 跨语言契约：API 语义、歧义规则、`.gtc` 二进制格式。
+  英文版记录所译源文件的哈希，CI 在两者漂移时失败
+- `conformance/` — 38,348 条语言中立用例，覆盖 SPEC §2 的**全部** 11 个公开函数；
+  任何语言的实现都必须 100% 通过。`known-divergences.yaml` 登记允许的差异
+- `scripts/verify_published.py` 与 `.github/workflows/post-release.yml` — 发布后从各自的
+  包仓库安装，再对**装下来的东西**跑一遍套件。每次发布自动触发，每日定时重跑
+- `pipeline/build_gtc.py` — 从 GeoJSON 构建 `.gtc`；`scripts/validate_gtc.py` 校验产物
 - `reference/geopandas_impl.py` — geopandas 实现，保留为差分对拍的 oracle，不再发布
+- `.github/workflows/release.yml` — 四个生态各自从自己的 tag 前缀发布：
+  `py-v*`、`npm-v*`、`packages/go/v*`、`cli-v*`
+
+### 发布过程中发现并修复
+
+以下问题在打 tag 之后才暴露，均已在 `3.0.0` 正式版发布前修复，记录于此以免重蹈：
+
+- `npm version` 在仓库版本号已等于 tag 版本时报 "Version not changed" 并退出，导致
+  首次 npm 发布失败。版本注入改为幂等脚本，并加入发布前测试
+- Go module 路径缺少 Go 对 v2+ 主版本强制要求的 `/v3` 后缀。本地 `go build` / `go test` /
+  交叉编译全部通过，只有从 proxy `go get` 时被拒绝。被发布后验证抓到
+- 一致性套件漏了 `reverse_batch`、`list_regions`、`get_region` 三个函数 —— 三个实现各自
+  实现了、各自通过了单元测试，但没有任何东西保证它们彼此一致。补齐后三者确认一致
+
+### 已知的运维约束
+
+- npm 发布 token 于 **2026-12-09** 过期（npm 对写权限 token 强制 90 天上限）；
+  **2027 年 1 月起** npm 移除 granular token 直接发布的能力，届时必须切换到
+  Trusted Publishing。详见 [docs/RELEASING.md](docs/RELEASING.md)
 
 ---
 

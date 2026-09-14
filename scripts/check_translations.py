@@ -27,6 +27,8 @@ _ROOT = Path(__file__).resolve().parent.parent
 TRANSLATIONS = {
     "SPEC_EN.md": "SPEC.md",
     "PORTING_EN.md": "PORTING.md",
+    "docs/CLI_EN.md": "docs/CLI.md",
+    "CONTRIBUTING_EN.md": "CONTRIBUTING.md",
 }
 
 _MARKER = re.compile(

@@ -126,6 +126,11 @@ pip install -e .
 - `conformance/adapters/python.py` — needed because `run.py --adapter python` inserts the
   repository root into `sys.path` and therefore always tests the working tree. This one
   imports normally, so it tests whatever is installed
+- `docs/CLI.md` / `docs/CLI_EN.md` — every subcommand and HTTP route of the CLI, exit-code
+  and stdout/stderr conventions, deployment notes
+- `CONTRIBUTING.md` / `CONTRIBUTING_EN.md` — the workflow by intent: fix a bug, change a
+  behaviour (SPEC → Python → regenerate suite → other ports → divergence registry),
+  update data, add a language, add a test at the right layer
 - `docs/RELEASING.md` — which tag publishes what, and the credentials each needs.
   Records that NPM_TOKEN expires 2026-12-09: npm caps write tokens at 90 days, so
   the npm job fails alone while the other three ecosystems keep working
