@@ -1,0 +1,12 @@
+# The workflows pin every action to a commit SHA, so a hijacked tag cannot
+# reach the publish jobs. Pinning only helps if the pins move: this opens a
+# PR when an action releases, with the new SHA and the version in the comment.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

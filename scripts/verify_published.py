@@ -23,13 +23,23 @@ each ecosystem is installed the way a user installs it.
     python scripts/verify_published.py --only python
     python scripts/verify_published.py --only python --version 3.0.0rc1
 
-Exits non-zero if any check fails.
+The same checks can run *before* publishing, against the artifact release.yml
+has just built, so a broken wheel or tarball is caught while the version
+number can still be reused:
+
+    python scripts/verify_published.py --only python --version 3.0.1 --artifact dist/geotool_cn-3.0.1-py3-none-any.whl
+    python scripts/verify_published.py --only node   --version 3.0.1 --artifact packages/node/geotoolcn-core-3.0.1.tgz
+    python scripts/verify_published.py --only cli    --version 3.0.1 --artifact /tmp/dist
+
+Go has no build artifact — the tag is the release — so --artifact does not
+apply to it. Exits non-zero if any check fails.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import os
 import platform
 import shutil
@@ -89,6 +99,28 @@ def parse_version(text: str) -> tuple[int, ...]:
     return tuple(parts)
 
 
+_VERSION_IN_TAG = re.compile(r"(\d+(?:\.\d+)*)(.*)$")
+
+
+def version_key(text: str) -> tuple:
+    """Sort key for release versions: numeric components, then pre-release
+    below final.
+
+    `sorted()` on the raw strings put `3.9.0` above `3.10.0` and `3.0.0rc1`
+    above `3.0.0`, so the daily run downloaded the wrong "latest" release.
+    """
+    m = _VERSION_IN_TAG.search(text.strip())  # skips any prefix: cli-v, v, …
+    if not m:
+        return ((), 0, text)
+    numbers = tuple(int(n) for n in m.group(1).split("."))
+    suffix = m.group(2)
+    # A final release outranks any pre-release of the same numbers.
+    return (numbers, 1 if not suffix else 0, suffix)
+
+
+_PSEUDO_VERSION = re.compile(r"-0\.\d{14}-[0-9a-f]{12}$")
+
+
 def conformance(adapter_cmd: str, env=None) -> Check:
     """Run all 38k cases against an adapter that speaks the line protocol."""
     proc = run(
@@ -120,18 +152,24 @@ def outside_repo(path: Path, label: str) -> Check:
 # ---------------------------------------------------------------- Python
 
 
-def verify_python(version: str | None, work: Path) -> list[Check]:
+def verify_python(version: str | None, work: Path, artifact: Path | None = None) -> list[Check]:
     checks: list[Check] = []
     venv = work / "venv"
     run([sys.executable, "-m", "venv", str(venv)], check=True)
     py = venv / ("Scripts" if os.name == "nt" else "bin") / "python"
 
-    spec = f"geotool-cn=={version}" if version else "geotool-cn"
-    # --pre only when explicitly asking for a prerelease: the default has to
-    # mirror what a plain `pip install geotool-cn` gives a user.
-    cmd = [str(py), "-m", "pip", "install", "--quiet", spec]
-    if version and any(c.isalpha() for c in version.split(".")[-1]):
-        cmd.insert(4, "--pre")
+    if artifact is not None:
+        # A local wheel: the pre-publish path. Installed from a copy so pip
+        # cannot resolve anything back into the working tree.
+        spec = str(artifact.resolve())
+        cmd = [str(py), "-m", "pip", "install", "--quiet", "--no-deps", "--no-index", spec]
+    else:
+        spec = f"geotool-cn=={version}" if version else "geotool-cn"
+        # --pre only when explicitly asking for a prerelease: the default has to
+        # mirror what a plain `pip install geotool-cn` gives a user.
+        cmd = [str(py), "-m", "pip", "install", "--quiet", spec]
+        if version and any(c.isalpha() for c in version.split(".")[-1]):
+            cmd.insert(4, "--pre")
     proc = run(cmd)
     if proc.returncode != 0:
         return [Check(f"pip install {spec}", False, proc.stderr.strip()[-400:])]
@@ -182,6 +220,11 @@ print(json.dumps({
         info["reported"] == info["installed"],
         f"reports {info['reported']}, pip installed {info['installed']}",
     ))
+    checks.append(Check(
+        "version matches what was requested",
+        version is None or info["installed"] == version,
+        f"installed {info['installed']}",
+    ))
 
     requires = run([str(py), "-m", "pip", "show", "geotool-cn"]).stdout
     line = next((l for l in requires.splitlines() if l.startswith("Requires:")), "")
@@ -226,7 +269,7 @@ print(json.dumps({
 # ------------------------------------------------------------------ Node
 
 
-def verify_node(version: str | None, work: Path) -> list[Check]:
+def verify_node(version: str | None, work: Path, artifact: Path | None = None) -> list[Check]:
     checks: list[Check] = []
     if not shutil.which("npm"):
         return [Check("npm available", False, "npm not on PATH")]
@@ -237,7 +280,11 @@ def verify_node(version: str | None, work: Path) -> list[Check]:
         json.dumps({"name": "verify", "private": True, "type": "module"}) + "\n"
     )
 
-    spec = f"@geotoolcn/core@{version}" if version else "@geotoolcn/core"
+    if artifact is not None:
+        # A local `npm pack` tarball: the pre-publish path.
+        spec = str(artifact.resolve())
+    else:
+        spec = f"@geotoolcn/core@{version}" if version else "@geotoolcn/core"
     proc = run(["npm", "install", "--no-audit", "--no-fund", spec], cwd=proj)
     if proc.returncode != 0:
         return [Check(f"npm install {spec}", False, proc.stderr.strip()[-400:])]
@@ -317,7 +364,10 @@ console.log(JSON.stringify({
 # -------------------------------------------------------------------- Go
 
 
-def verify_go(version: str | None, work: Path) -> list[Check]:
+def verify_go(version: str | None, work: Path, artifact: Path | None = None) -> list[Check]:
+    if artifact is not None:
+        return [Check("--artifact does not apply to Go", False,
+                      "the tag is the release; verify it with --version instead")]
     checks: list[Check] = []
     if not shutil.which("go"):
         return [Check("go available", False, "go not on PATH")]
@@ -381,7 +431,10 @@ def verify_go(version: str | None, work: Path) -> list[Check]:
     # exists — but until a packages/go/v* tag lands, `go get` hands users a
     # pseudo-version derived from the branch tip. That still works and still
     # deserves the suite; it is just not a release anyone can pin to.
-    pseudo = resolved.startswith("v0.0.0-")
+    # A pseudo-version looks like v3.0.1-0.20260910120000-abcdef123456: the
+    # major is whatever the module path says, so match the timestamp-hash
+    # tail rather than a literal v0.0.0 prefix that /v3 modules never have.
+    pseudo = bool(_PSEUDO_VERSION.search(resolved))
     checks.append(Check(
         "resolved to a tagged release",
         not pseudo,
@@ -411,9 +464,12 @@ def verify_go(version: str | None, work: Path) -> list[Check]:
 # ------------------------------------------------------------------- CLI
 
 
-def verify_cli(version: str | None, work: Path) -> list[Check]:
+def verify_cli(version: str | None, work: Path, artifact: Path | None = None) -> list[Check]:
     checks: list[Check] = []
-    if not shutil.which("gh"):
+    if artifact is not None and version is None:
+        return [Check("--artifact needs --version", False,
+                      "the binaries carry the version the tag injected; say which")]
+    if artifact is None and not shutil.which("gh"):
         return [Check("gh available", False, "gh not on PATH")]
 
     tag = f"cli-v{version}" if version else None
@@ -427,15 +483,21 @@ def verify_cli(version: str | None, work: Path) -> list[Check]:
         if not tags:
             return [Check("a cli-v* release exists", False,
                           "no cli-v* release published yet")]
-        tag = sorted(tags)[-1]
+        tag = max(tags, key=version_key)
     checks.append(Check(f"release {tag} found", True))
 
     dl = work / "cli"
     dl.mkdir()
-    proc = run(["gh", "release", "download", tag, "--repo", "13Cohen/GeoToolCN",
-                "--dir", str(dl), "--pattern", "geotoolcn-*"])
-    if proc.returncode != 0:
-        return checks + [Check(f"download {tag} assets", False, proc.stderr.strip()[-300:])]
+    if artifact is not None:
+        # The directory release.yml just built into: the pre-publish path.
+        for src in Path(artifact).iterdir():
+            if src.name.startswith("geotoolcn-"):
+                shutil.copy2(src, dl / src.name)
+    else:
+        proc = run(["gh", "release", "download", tag, "--repo", "13Cohen/GeoToolCN",
+                    "--dir", str(dl), "--pattern", "geotoolcn-*"])
+        if proc.returncode != 0:
+            return checks + [Check(f"download {tag} assets", False, proc.stderr.strip()[-300:])]
 
     assets = sorted(p.name for p in dl.iterdir())
     expected = {"linux-amd64", "linux-arm64", "darwin-amd64", "darwin-arm64", "windows-amd64.exe"}
@@ -585,13 +647,29 @@ def verify_cli(version: str | None, work: Path) -> list[Check]:
     # `which docker` is not enough: the CLI can be installed with the daemon
     # stopped, and that is an environment gap, not a release defect.
     docker_up = shutil.which("docker") and run(["docker", "info"], timeout=30).returncode == 0
-    if docker_up:
+    if artifact is not None:
+        checks.append(Check("the container image runs", True,
+                            "skipped: image is not pushed before publishing", skipped=True))
+    elif docker_up:
         image = f"ghcr.io/13cohen/geotoolcn:{tag}"
         proc = run(["docker", "run", "--rm", image, "reverse", "39.9042", "116.4074"], timeout=300)
         checks.append(Check(
             "the container image runs",
             proc.returncode == 0 and '"110101"' in proc.stdout,
             proc.stdout.strip()[:200] or proc.stderr.strip()[-200:],
+        ))
+        # The image is built separately from the binaries and injects the
+        # version through its own path (a Docker build-arg), so it can report
+        # the wrong one while every binary is right. It did, for 3.0.0.
+        proc = run(["docker", "run", "--rm", image, "version"], timeout=120)
+        try:
+            reported = json.loads(proc.stdout).get("version", "")
+        except json.JSONDecodeError:
+            reported = proc.stdout.strip()[:40]
+        checks.append(Check(
+            "the container image reports the tag's version",
+            reported == tag.removeprefix("cli-v"),
+            f"{reported!r} vs tag {tag}",
         ))
     else:
         checks.append(Check("the container image runs", True,
@@ -617,6 +695,10 @@ def main() -> int:
                         help="comma-separated: python,node,go,cli (default: all)")
     parser.add_argument("--version", default=None,
                         help="version to verify; default is whatever the registry serves as latest")
+    parser.add_argument("--artifact", type=Path, default=None, metavar="PATH",
+                        help="verify a locally built artifact instead of the registry: a wheel "
+                             "(python), an `npm pack` tarball (node) or a directory of "
+                             "binaries (cli). Needs --only with a single ecosystem")
     parser.add_argument("--wait", type=int, default=0, metavar="SECONDS",
                         help="keep retrying while the package is not there yet — registries "
                              "index a publish asynchronously, so a check run straight after "
@@ -629,8 +711,16 @@ def main() -> int:
     unknown = [e for e in selected if e not in VERIFIERS]
     if unknown:
         parser.error(f"unknown ecosystem(s): {', '.join(unknown)}")
+    if args.artifact is not None:
+        if len(selected) != 1:
+            parser.error("--artifact applies to exactly one ecosystem; pass --only")
+        if not args.artifact.exists():
+            parser.error(f"--artifact {args.artifact} does not exist")
+        if args.wait:
+            parser.error("--wait is for registries; a local artifact is either there or not")
 
-    print(f"验证已发布产物 — 版本: {args.version or 'registry latest'}")
+    source = f"local artifact {args.artifact}" if args.artifact else "registry"
+    print(f"验证{'构建产物' if args.artifact else '已发布产物'} — 版本: {args.version or 'registry latest'}  来源: {source}")
     print(f"仓库（仅提供测试数据与适配器）: {REPO}\n")
 
     results: dict[str, list[Check]] = {}
@@ -640,7 +730,7 @@ def main() -> int:
         while True:
             with tempfile.TemporaryDirectory(prefix=f"gtc-verify-{eco}-") as tmp:
                 try:
-                    checks = VERIFIERS[eco](args.version, Path(tmp))
+                    checks = VERIFIERS[eco](args.version, Path(tmp), args.artifact)
                 except Exception as exc:  # noqa: BLE001 - one ecosystem must not stop the rest
                     checks = [Check("verifier crashed", False, f"{type(exc).__name__}: {exc}")]
             # Only the first check — fetching the artifact — is worth retrying.

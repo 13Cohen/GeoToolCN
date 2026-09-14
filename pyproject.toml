@@ -1,5 +1,8 @@
 [build-system]
-requires = ["setuptools>=64"]
+# 77 is the first release that understands the PEP 639 string form of
+# `license` below; with an older setuptools and --no-build-isolation the
+# build fails on that line.
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]

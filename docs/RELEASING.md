@@ -12,19 +12,69 @@
 
 Go 的 tag 形状不是审美选择：module 位于子目录时，Go 要求 tag 必须是 `<子目录>/vX.Y.Z`。
 
-```bash
-git tag py-v3.0.0 && git push origin py-v3.0.0
-```
+## 发布一个版本
 
-版本号从 tag 推导后写入 `pyproject.toml` / `package.json`，仓库里不再维护第二份版本号。
-
-## 首次发布建议先发预发布版
-
-四条发布路径都还没有被真实 tag 验证过。先发一个预发布版，失败了不占用正式版本号：
+**版本号以仓库为准，tag 必须与之一致**。发布流程不再从 tag 反写 manifest —— 那样做的结果是
+同一个提交能以两个不同的号发出去，而 git 里那份永远不是真的（`pip install git+…@py-v3.0.0rc1`
+装出来是 3.0.0）。
 
 ```bash
-git tag py-v3.0.0rc1 && git push origin py-v3.0.0rc1
+bash scripts/set_release_version.sh python 3.0.1      # 改 pyproject.toml
+bash scripts/set_release_version.sh node   3.0.1      # 改 packages/node/package.json
+# 提交、合并到 master，然后在 master 上打 tag：
+git tag py-v3.0.1 && git push origin py-v3.0.1
 ```
+
+`release.yml` 的第一个 job 跑 `scripts/release_gate.sh`，以下任一情况直接拒绝、什么都不发：
+
+- tag 所指的提交不在 `master` 上（从功能分支打的 tag，CI 从没批准过那个提交）
+- `py-v*` / `npm-v*` 的版本与 `pyproject.toml` / `package.json` 不一致
+- `packages/go/vN.x.y` 的主版本与 `go.mod` 路径的 `/vN` 后缀不一致（proxy 会拒绝，
+  `packages/go/v3.0.0` 曾因此被移动过一次）
+
+CLI 的版本不在树里：`main.go` 的默认值是 `dev`，发布时由 tag 注入进二进制与镜像。
+
+门禁之后、上传之前，每个 job 都**测即将上传的那个产物**而不是源码树：Python 装 wheel 进干净
+venv、Node 装 `npm pack` 出来的 tarball、CLI 跑刚编出来的二进制 —— 全部走
+`scripts/verify_published.py --artifact`，与发布后的验证是同一套检查（含 38k 条 conformance）。
+PyPI 同号不可覆盖、npm 72 小时后不可 unpublish，所以坏包必须在这里拦住，而不是发出去之后
+才发现号已经烧掉了。
+
+## 预发布版
+
+版本号带后缀（`3.1.0rc1`、`3.1.0-rc.1`、`v3.1.0-rc.1`）即视为预发布，门禁输出 `prerelease=true`：
+
+- npm 发到 `next` dist-tag，`npm install @geotoolcn/core` 仍解析到上一个正式版
+- GitHub Release 标记为 pre-release，`releases/latest/download/…` 不会指向它
+- 镜像只打 tag 名与 commit sha，不动 `latest`、`3.1`、`3`
+- PyPI 本身区分预发布，`pip install geotool-cn` 默认不装
+
+```bash
+git tag py-v3.1.0rc1 && git push origin py-v3.1.0rc1
+```
+
+⚠️ PyPI 上的 `3.0.0rc1` 自报 2.1.0（就是「从 tag 反写」那次事故的产物），应 yank：
+`https://pypi.org/manage/project/geotool-cn/release/3.0.0rc1/`。
+
+## 镜像 tag
+
+| tag | 含义 |
+|-----|------|
+| `cli-v3.0.1` | 与 git tag 同名，不可变 |
+| `3.0.1` / `3.0` / `3` | semver，后两个随正式版移动 |
+| `latest` | 最近一个正式版；预发布不动它 |
+| `sha-<commit>` | 构建它的提交 |
+
+## 供应链
+
+三个 workflow 里的每个 action 都锁到 commit SHA（注释里是对应的版本号），`.github/dependabot.yml`
+每周开 PR 更新。顶层 `permissions: contents: read`，只有 `cli` job 提升到 `contents: write`
+（传 Release 资产）和 `packages: write`（推镜像）。Release 二进制附 `SHA256SUMS` 与
+GitHub 构建证明（`gh attestation verify geotoolcn-linux-amd64 --owner 13Cohen`）；
+npm 包带 `--provenance`。
+
+⚠️ **不要移动 `packages/go/v*` tag。** proxy.golang.org 与 sum.golang.org 一旦记录就不可变，
+移动 tag 会让用户永久拿到旧内容或报 checksum mismatch。发错了就发下一个号。
 
 ## 本地凭据
 
@@ -36,9 +86,14 @@ git tag py-v3.0.0rc1 && git push origin py-v3.0.0rc1
 
 ```bash
 set -a && . .env && set +a
-python -m build && twine upload dist/*                    # PyPI，twine 直接读 TWINE_*
-cd packages/node && npm publish --access public           # npm，需 NODE_AUTH_TOKEN=$NPM_TOKEN
+rm -rf dist && python -m build && twine upload dist/*     # PyPI，twine 直接读 TWINE_*；先清 dist/，否则旧产物一起上传
+cd packages/node && node scripts/sync-data.mjs \
+  && npm publish --access public \
+       --//registry.npmjs.org/:_authToken="$NPM_TOKEN"    # npm 本身不读 NODE_AUTH_TOKEN，那是 setup-node 写 .npmrc 用的
 ```
+
+本地发布绕过了门禁与产物验证，只在 CI 不可用时使用；发之前至少跑一遍
+`python scripts/verify_published.py --only <生态> --version <版本> --artifact <产物>`。
 
 | 渠道 | 变量 | 说明 |
 |------|------|------|
@@ -79,10 +134,10 @@ PyPI 同理（`release.yml` 里已写明为什么现在显式传 token 而非用
 
 ## 发布后验证
 
-`test.yml` 里的 12 项检查全部作用于工作副本。发布不是拷贝 —— 它从 tag 重写版本号、套用
-`files` 白名单、并且只能取到 git 里有的东西。所以包可能以任何一种在发布前不可见的方式损坏：
+`test.yml` 里的检查全部作用于工作副本。发布不是拷贝 —— 它套用 `files` 白名单、并且只能取到
+git 里有的东西。所以包可能以在发布前的树上不可见的方式损坏：
 
-- `3.0.0rc1` 通过了全部 12 项检查，装下来却报告自己是 `2.1.0`
+- `3.0.0rc1` 通过了 CI 的全部检查，装下来却报告自己是 `2.1.0`（那时版本还从 tag 反写）
 - `packages/node/data` 是 gitignored 的，它能否到达用户，取决于发布步骤和 `files` 白名单是否
   达成一致 —— 一个全新 clone 可以通过 CI，而 tarball 里的包加载不了自己的数据集
 - `go get` 只取 git 里有的东西，`go:embed` 又够不到 module 目录之外，这正是
