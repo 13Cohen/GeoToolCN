@@ -63,6 +63,23 @@ function exactSearch(table, value) {
   return -1;
 }
 
+const HEADER_SIZE = 32;
+const SECTION_ENTRY_SIZE = 24;
+const REQUIRED_SECTIONS = [
+  SECTION_META,
+  SECTION_NAMES,
+  SECTION_GEOM,
+  SECTION_GEOM_INDEX,
+  SECTION_GRID_SOLID,
+  SECTION_GRID_MIXED_CELLS,
+  SECTION_GRID_MIXED_PTRS,
+  SECTION_GRID_MIXED_LISTS,
+  SECTION_GRID_PROV_SOLID,
+  SECTION_GRID_PROV_MIXED_CELLS,
+  SECTION_GRID_PROV_MIXED_PTRS,
+  SECTION_GRID_PROV_MIXED_LISTS,
+];
+
 export class GTCData {
   /** @param {Uint8Array} bytes */
   constructor(bytes) {
@@ -70,7 +87,10 @@ export class GTCData {
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     this.view = view;
 
-    if (view.getUint32(0, true) !== MAGIC) {
+    // Every offset below comes from the file, so each is checked before
+    // use: a truncated or corrupt file must surface as GTCFormatError, not
+    // as a RangeError from DataView or a TypeError on a missing section.
+    if (bytes.byteLength < HEADER_SIZE || view.getUint32(0, true) !== MAGIC) {
       throw new GTCFormatError("not a .gtc file");
     }
     const formatVersion = view.getUint16(4, true);
@@ -92,28 +112,66 @@ export class GTCData {
     this.gridHeight = view.getUint16(30, true);
     this.scale = 10 ** this.precision;
 
+    const size = bytes.byteLength;
+    if (HEADER_SIZE + SECTION_ENTRY_SIZE * sectionCount > size) {
+      throw new GTCFormatError("file truncated inside the section table");
+    }
     /** @type {Map<number, {offset: number, length: number}>} */
     const sections = new Map();
     for (let i = 0; i < sectionCount; i += 1) {
-      const base = 32 + 24 * i;
-      sections.set(view.getUint16(base, true), {
-        offset: Number(view.getBigUint64(base + 8, true)),
-        length: Number(view.getBigUint64(base + 16, true)),
-      });
+      const base = HEADER_SIZE + SECTION_ENTRY_SIZE * i;
+      const kind = view.getUint16(base, true);
+      const offset = Number(view.getBigUint64(base + 8, true));
+      const length = Number(view.getBigUint64(base + 16, true));
+      if (offset > size || length > size - offset) {
+        throw new GTCFormatError(
+          `section ${kind} lies outside the file ` +
+            `(offset ${offset}, length ${length}, file ${size} bytes)`,
+        );
+      }
+      sections.set(kind, { offset, length });
+    }
+    for (const kind of REQUIRED_SECTIONS) {
+      if (!sections.has(kind)) throw new GTCFormatError(`section ${kind} is missing`);
     }
     this.sections = sections;
 
     const meta = sections.get(SECTION_META);
+    if (meta.length < 4) throw new GTCFormatError("META section too short");
     this.metaOffset = meta.offset;
     this.recordCount = view.getUint32(meta.offset, true);
+    if (meta.length < 4 + META_RECORD_SIZE * this.recordCount) {
+      throw new GTCFormatError(
+        `META section holds ${meta.length} bytes, ${this.recordCount} records ` +
+          `need ${4 + META_RECORD_SIZE * this.recordCount}`,
+      );
+    }
 
     const names = sections.get(SECTION_NAMES);
     this.namesOffset = names.offset;
+    this.namesLength = names.length;
 
     const geom = sections.get(SECTION_GEOM);
     this.geomOffset = geom.offset;
     this.hasGeometry = geom.length > 0;
     this.geomIndex = this.#u32(SECTION_GEOM_INDEX);
+    if (this.hasGeometry) {
+      // The mini tier writes a zero grid step along with its empty grid;
+      // only a tier that will be searched needs a real one.
+      if (!(this.gridStep > 0)) throw new GTCFormatError("grid step must be positive");
+      if (this.geomIndex.length !== this.recordCount + 1) {
+        throw new GTCFormatError(
+          `GEOM_INDEX has ${this.geomIndex.length} entries, expected ${this.recordCount + 1}`,
+        );
+      }
+      let previous = 0;
+      for (const off of this.geomIndex) {
+        if (off > geom.length || off < previous) {
+          throw new GTCFormatError("GEOM_INDEX points outside the GEOM section");
+        }
+        previous = off;
+      }
+    }
 
     this.districtGrid = this.#loadGrid(
       SECTION_GRID_SOLID,
@@ -149,7 +207,11 @@ export class GTCData {
 
   #loadGrid(solidType, cellsType, ptrsType, listsType) {
     const solidSection = this.sections.get(solidType);
+    if (solidSection.length < 4) throw new GTCFormatError(`section ${solidType} too short`);
     const runCount = this.view.getUint32(solidSection.offset, true);
+    if (solidSection.length < 4 + 12 * runCount) {
+      throw new GTCFormatError(`section ${solidType} truncated`);
+    }
     const flat = this.#u32(solidType, 4, 12 * runCount);
 
     const runStart = new Uint32Array(runCount);
@@ -162,14 +224,31 @@ export class GTCData {
     }
 
     const cellsSection = this.sections.get(cellsType);
+    if (cellsSection.length < 4) throw new GTCFormatError(`section ${cellsType} too short`);
     const mixedCount = this.view.getUint32(cellsSection.offset, true);
+    if (cellsSection.length < 4 + 4 * mixedCount) {
+      throw new GTCFormatError(`section ${cellsType} truncated`);
+    }
+    const mixedPtrs = this.#u32(ptrsType);
+    const mixedLists = this.#u32(listsType);
+    // Every mixed cell owns a [ptr[i], ptr[i+1]) slice of the candidates.
+    if (mixedCount && mixedPtrs.length !== mixedCount + 1) {
+      throw new GTCFormatError(
+        `section ${ptrsType} has ${mixedPtrs.length} pointers for ${mixedCount} mixed cells`,
+      );
+    }
+    for (const p of mixedPtrs) {
+      if (p > mixedLists.length) {
+        throw new GTCFormatError(`section ${ptrsType} points outside section ${listsType}`);
+      }
+    }
     return {
       runStart,
       runLength,
       runValue,
       mixedCells: this.#u32(cellsType, 4, 4 * mixedCount),
-      mixedPtrs: this.#u32(ptrsType),
-      mixedLists: this.#u32(listsType),
+      mixedPtrs,
+      mixedLists,
     };
   }
 
@@ -202,6 +281,11 @@ export class GTCData {
       this.adcodes[i] = code;
       this.levels[i] = level;
       this.parents[i] = parent ? String(parent).padStart(6, "0") : null;
+      if (nameOffset + nameLength > this.namesLength) {
+        throw new GTCFormatError(
+          `record ${i} names ${nameOffset + nameLength} bytes past the NAMES section`,
+        );
+      }
       const nameStart = this.bytes.byteOffset + this.namesOffset + nameOffset;
       const name = decoder.decode(
         new Uint8Array(this.bytes.buffer, nameStart, nameLength),

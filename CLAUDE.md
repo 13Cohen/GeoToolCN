@@ -19,6 +19,9 @@ Offline geocoding toolkit for Chinese administrative regions. Converts GPS coord
 # Run all tests
 pytest
 
+# Go: always with the race detector — the geometry cache is lazily filled
+cd packages/go && go test -race ./...
+
 # Run specific test class
 pytest tests/test_geotool.py::TestReverse
 
@@ -79,6 +82,10 @@ pip install -e .
 - `tests/test_admin_tree.py` — pytest test suite for admin tree
 - `tests/test_invariants.py` — structural invariants (INV-01..12); asserts properties that
   must hold for *every* region, so one test yields thousands of assertions
+- `tests/test_robustness.py` — how the library *fails*: NaN/Inf coordinates, truncated or
+  tampered `.gtc` files, `close()` / context manager / descriptor leaks, antipodal
+  `distance()`. The conformance suite pins answers; this pins failure modes that JSON
+  cannot express (NaN) or that need a bad file
 - `scripts/validate_data.py` — 10 categories of source-GeoJSON checks; run in CI
 - `scripts/validate_gtc.py` — L0 checks on a built `.gtc`: CRC, metadata ordering, parent
   coverage, representative points, every solid grid run, and a cross-check against the
@@ -104,6 +111,9 @@ pip install -e .
   module directory
 - `packages/go/cmd/geotoolcn/` — the CLI and HTTP server, covering languages with no
   binding. Go because it produces one static binary with the dataset inside.
+  `serve` calls `PreloadGeometry()` at start-up; the library's lazy per-record decode is
+  guarded by `sync.Once` (it was a plain bool once, and `go test -race` caught the data
+  race that produced wrong answers under concurrent first requests — keep `-race` in CI).
   `main_test.go` builds the binary once and runs every subcommand and route the way a
   user would; each expectation is computed by calling the library, never written down,
   so the tests assert only what the CLI can get wrong — argument parsing and JSON shape

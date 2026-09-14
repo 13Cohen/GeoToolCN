@@ -21,14 +21,20 @@ var embeddedAdmin []byte
 // is still a province. MarshalJSON preserves that distinction: a leaf omits the
 // key entirely, a childless province emits "children":[]. Collapsing the two
 // changes the tree hash the conformance suite pins.
+//
+// The tag carries no omitempty and the marshaller has a value receiver so
+// that the rule holds however the node is reached — through the *TreeNode
+// the tree hands out, or as a value a caller copied into its own struct.
+// With a pointer receiver, json.Marshal on a value fell back to the default
+// encoding and the childless-province distinction was lost.
 type TreeNode struct {
 	Value    string      `json:"value"`
 	Label    string      `json:"label"`
-	Children []*TreeNode `json:"children,omitempty"`
+	Children []*TreeNode `json:"children"`
 }
 
 // MarshalJSON emits "children" exactly when the node is not a leaf.
-func (n *TreeNode) MarshalJSON() ([]byte, error) {
+func (n TreeNode) MarshalJSON() ([]byte, error) {
 	if n.Children == nil {
 		return json.Marshal(struct {
 			Value string `json:"value"`

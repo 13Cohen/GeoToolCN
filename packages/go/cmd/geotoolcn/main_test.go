@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -180,15 +181,43 @@ func TestSearchMatchesLibrary(t *testing.T) {
 
 func TestSearchEmptyResultIsAnArrayNotNull(t *testing.T) {
 	// A Go nil slice marshals to `null`. To a caller doing `| jq length`
-	// that is a type error, not zero.
-	stdout, _, _ := run(t, "search", "不存在的地方")
-	if strings.TrimSpace(stdout) != "[]" {
-		t.Errorf("empty search should print [], got %q", stdout)
+	// that is a type error, not zero. Both ways of coming up empty — no
+	// match, and a parent filter that names nothing — must print [].
+	for _, args := range [][]string{
+		{"search", "不存在的地方"},
+		{"search", "朝阳区", "--province", "不存在"},
+		{"search", "朝阳区", "--city", "000000"},
+	} {
+		stdout, _, _ := run(t, args...)
+		if strings.TrimSpace(stdout) != "[]" {
+			t.Errorf("%v should print [], got %q", args, stdout)
+		}
 	}
 }
 
 func TestSearchRequiresQuery(t *testing.T) {
 	mustFail(t, 1, "search")
+}
+
+func TestSearchRejectsMisplacedFlags(t *testing.T) {
+	// `search --level district 朝阳区` used to take "--level" as the query
+	// and print [] with exit 0. Both a flag-shaped query and an unknown flag
+	// are argument errors, reported the JSON way with exit 1 — not Go's
+	// usage text with exit 2, which docs/CLI.md reserves for a bad subcommand.
+	mustFail(t, 1, "search", "--level", "district", "朝阳区")
+	mustFail(t, 1, "search", "朝阳区", "--bogus")
+	mustFail(t, 1, "search", "朝阳区", "--level", "country")
+}
+
+func TestReverseRejectsNonCoordinates(t *testing.T) {
+	for _, args := range [][]string{
+		{"reverse", "NaN", "116.4"},
+		{"reverse", "39.9", "Inf"},
+		{"reverse", "91", "116.4"},
+		{"reverse", "39.9", "181"},
+	} {
+		mustFail(t, 1, args...)
+	}
 }
 
 func TestTreeMatchesLibrary(t *testing.T) {
@@ -364,6 +393,61 @@ func TestServeEveryRoute(t *testing.T) {
 	}
 }
 
+func TestServeRejectsNonGET(t *testing.T) {
+	base := startServer(t)
+	for _, method := range []string{http.MethodPost, http.MethodDelete, http.MethodPut} {
+		req, _ := http.NewRequest(method, base+"/reverse?lat=39.9&lng=116.4", nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusMethodNotAllowed {
+			t.Errorf("%s /reverse: %d, want 405", method, resp.StatusCode)
+		}
+		var m map[string]any
+		if json.Unmarshal(body, &m) != nil || m["error"] == "" {
+			t.Errorf("%s /reverse: body %q should be a JSON error", method, body)
+		}
+	}
+}
+
+func TestServeShutsDownOnSIGTERM(t *testing.T) {
+	// PID 1 in the container receives SIGTERM from the runtime. Without a
+	// handler the Go runtime exits 2 mid-request; with one, Serve drains
+	// and exits 0.
+	addr := freePort(t)
+	cmd := exec.Command(binary, "serve", "--addr", addr)
+	cmd.Stderr = io.Discard
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	base := "http://" + addr
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if resp, err := http.Get(base + "/healthz"); err == nil {
+			resp.Body.Close()
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("exit after SIGTERM: %v, want 0", err)
+		}
+	case <-time.After(15 * time.Second):
+		_ = cmd.Process.Kill()
+		t.Fatal("server did not exit within 15 s of SIGTERM")
+	}
+}
+
 func TestServeErrorStatuses(t *testing.T) {
 	base := startServer(t)
 	for _, c := range []struct {
@@ -373,11 +457,17 @@ func TestServeErrorStatuses(t *testing.T) {
 		{"/reverse", 400},
 		{"/reverse?lat=39.9", 400},
 		{"/reverse?lat=north&lng=116.4", 400},
+		{"/reverse?lat=NaN&lng=116.4", 400},
+		{"/reverse?lat=39.9&lng=Inf", 400},
+		{"/reverse?lat=91&lng=116.4", 400},
+		{"/reverse?lat=39.9&lng=-181", 400},
 		{"/lookup?adcode=999999", 404},
-		{"/lookup", 404},
+		{"/lookup", 400},
 		{"/search", 400},
+		{"/search?q=x&level=country", 400},
 		{"/regions?level=country", 400},
 		{"/regions", 400},
+		{"/nope", 404},
 	} {
 		status, _, body := get(t, base+c.path)
 		if status != c.want {

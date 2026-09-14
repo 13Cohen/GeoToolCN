@@ -1,4 +1,4 @@
-<!-- translation-of: SPEC.md sha256:391634386a80c75c8657e9b6f8bbe07b7027e8f48270cb24a8299a9efa5e169a -->
+<!-- translation-of: SPEC.md sha256:c50aeb9ab7d56647b146a9f0e304e789b7098d5a77ca49c21da9fd614e8822f4 -->
 
 # GeoToolCN Specification v1
 
@@ -118,6 +118,13 @@ lookups produce self-contradictory results such as `province=None` alongside
 > If the `full` / `lite` tier carries no city-layer geometry (see §4.1), `city`
 > in step 2 is always null. This is registered divergence `DIV-101`, measured at
 > 0.023% of points.
+
+**Non-finite coordinates.** When `lat` or `lng` is NaN, +Inf or -Inf the point
+lies in no cell: return the all-empty result — do not raise. Batch input
+routinely carries missing values (pandas NaN), and one bad point must not fail
+the whole batch. `is_in_china` / `is_in_region` return false for the same
+input. JSON cannot express NaN, so the conformance suite cannot cover this;
+each implementation pins it with its own unit tests.
 
 ### 2.2 `reverse_batch(coords) -> ReverseResult[]`
 
@@ -361,8 +368,18 @@ fixed-width so that implementations can read them without decoding.
 | 2 | `full` | + 1e-5 geometry + 0.05° grid | **5.95 MB** |
 
 The `mini` tier supports every API except `reverse`, `reverse_batch`,
-`is_in_china` and `is_in_region`. Calling a geometry-dependent API should raise
-a clear error rather than return an empty result.
+`is_in_china` and `is_in_region`. Calling a geometry-dependent API must raise a
+clear error rather than return an empty result: Python raises
+`GeometryUnavailable`, Node throws `GeometryUnavailable`, Go panics with
+`ErrNoGeometry` (those methods have no error return, and "geometry query on
+the mini tier" is a programming error, not bad input).
+
+**Damaged files.** Wrong magic, unsupported format version, a section table or
+section body running past the end of the file, a missing required section, a
+META record count that does not fit the section, NAMES/GEOM_INDEX offsets out
+of range — all of these must be reported at open time as the language's format
+error type (`GTCFormatError` / `GTCFormatError` / `*FormatError`). A truncated
+file must not reach the decoder and fail there as an out-of-bounds access.
 
 ### 4.2 Header (32 bytes)
 

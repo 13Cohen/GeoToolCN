@@ -23,6 +23,19 @@ function outOfChina(lng, lat) {
   return !(lng > LNG_MIN && lng < LNG_MAX && lat > LAT_MIN && lat < LAT_MAX);
 }
 
+/**
+ * Reject anything that is not a number. Without this a string slips through:
+ * `"116.4" + 0.006` is `"116.40.006"`, and the caller gets a string back
+ * with no error — the sort of value `req.query` hands over all the time.
+ * Python raises TypeError on the same input; so does this.
+ */
+function num(value, name) {
+  if (typeof value !== "number") {
+    throw new TypeError(`${name} must be a number, got ${typeof value}`);
+  }
+  return value;
+}
+
 function transformLat(x, y) {
   let ret =
     -100.0 +
@@ -60,6 +73,8 @@ function delta(lng, lat) {
 
 /** WGS-84 → GCJ-02. Returns [lng, lat]. */
 export function wgs84ToGcj02(lng, lat) {
+  num(lng, "lng");
+  num(lat, "lat");
   if (outOfChina(lng, lat)) return [lng, lat];
   const [dLng, dLat] = delta(lng, lat);
   return [lng + dLng, lat + dLat];
@@ -67,6 +82,8 @@ export function wgs84ToGcj02(lng, lat) {
 
 /** GCJ-02 → WGS-84. A single-step inverse, so the round trip loses ~1–5 m. */
 export function gcj02ToWgs84(lng, lat) {
+  num(lng, "lng");
+  num(lat, "lat");
   if (outOfChina(lng, lat)) return [lng, lat];
   const [dLng, dLat] = delta(lng, lat);
   return [lng - dLng, lat - dLat];
@@ -74,6 +91,8 @@ export function gcj02ToWgs84(lng, lat) {
 
 /** GCJ-02 → BD-09. */
 export function gcj02ToBd09(lng, lat) {
+  num(lng, "lng");
+  num(lat, "lat");
   const z = Math.sqrt(lng * lng + lat * lat) + 0.00002 * Math.sin(lat * X_PI);
   const theta = Math.atan2(lat, lng) + 0.000003 * Math.cos(lng * X_PI);
   return [z * Math.cos(theta) + 0.0065, z * Math.sin(theta) + 0.006];
@@ -81,6 +100,8 @@ export function gcj02ToBd09(lng, lat) {
 
 /** BD-09 → GCJ-02. */
 export function bd09ToGcj02(lng, lat) {
+  num(lng, "lng");
+  num(lat, "lat");
   const x = lng - 0.0065;
   const y = lat - 0.006;
   const z = Math.sqrt(x * x + y * y) - 0.00002 * Math.sin(y * X_PI);
@@ -90,18 +111,26 @@ export function bd09ToGcj02(lng, lat) {
 
 /** WGS-84 → BD-09. */
 export function wgs84ToBd09(lng, lat) {
+  num(lng, "lng");
+  num(lat, "lat");
   const [gLng, gLat] = wgs84ToGcj02(lng, lat);
   return gcj02ToBd09(gLng, gLat);
 }
 
 /** BD-09 → WGS-84. */
 export function bd09ToWgs84(lng, lat) {
+  num(lng, "lng");
+  num(lat, "lat");
   const [gLng, gLat] = bd09ToGcj02(lng, lat);
   return gcj02ToWgs84(gLng, gLat);
 }
 
 /** Great-circle distance in kilometres. Latitude first, unlike the conversions. */
 export function distance(lat1, lng1, lat2, lng2) {
+  num(lat1, "lat1");
+  num(lng1, "lng1");
+  num(lat2, "lat2");
+  num(lng2, "lng2");
   const toRad = (deg) => (deg * Math.PI) / 180.0;
   const dLat = toRad(lat2 - lat1);
   const dLng = toRad(lng2 - lng1);

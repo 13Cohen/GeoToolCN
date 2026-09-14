@@ -1,4 +1,4 @@
-<!-- translation-of: docs/CLI.md sha256:b7e72fd280757ed326c8eb2729768469eac023d89a936dfeecd8b3aeb5f339ed -->
+<!-- translation-of: docs/CLI.md sha256:9d39657c93ba84608891effd1a0acf2993fd2adc88b40df2780f331f7707eed8 -->
 
 # The geotoolcn CLI and HTTP server
 
@@ -53,8 +53,12 @@ Exit codes:
 | Code | Meaning |
 |------|---------|
 | `0` | Success |
-| `1` | Runtime failure: unparseable coordinate, unknown adcode, unsupported conversion |
+| `1` | Runtime failure: coordinate unparseable or out of range, unknown adcode, unsupported conversion, unknown option |
 | `2` | Usage error: missing or unknown subcommand |
+
+Coordinates must be finite and within `[-90, 90]` × `[-180, 180]`: `NaN`, `Inf`
+and `91` all exit `1` rather than answer with the empty "outside China" result —
+the two should not look alike to a caller.
 
 ## Subcommands
 
@@ -117,7 +121,10 @@ $ geotoolcn search 440300                          # by adcode
 ```
 
 The query is matched **literally** — `.`, `*`, `[` are not wildcards. No
-results prints `[]` (not `null`) with exit code `0`.
+results prints `[]` (not `null`) with exit code `0`; so does a `--province` /
+`--city` that names nothing. The query must come first: a query starting with
+`-` is treated as a misplaced flag and exits `1`. `--level` accepts only
+`province` / `city` / `district`.
 
 ### `tree`
 
@@ -163,7 +170,10 @@ stays clean.
 ### `version` / `help`
 
 `version` prints `{"version": "3.0.0"}`; `help` prints usage. `--version`,
-`-v`, `--help` and `-h` are aliases.
+`-v`, `--help` and `-h` are aliases. The version is injected from the tag at
+release time; a binary from `go install ...@v3.x.y` reads the module version Go
+recorded; a plain `go build` from an untagged tree reports `dev`. None of these
+four subcommands load the dataset.
 
 ## HTTP server
 
@@ -172,13 +182,14 @@ geotoolcn serve --addr :8080
 ```
 
 Every response is `Content-Type: application/json; charset=utf-8` with non-ASCII
-unescaped. `GET` only.
+unescaped — errors included: an unknown path is `404 {"error":…}`, a method
+other than `GET` / `HEAD` is `405 {"error":…}`.
 
 | Route | Parameters | Success | Failure |
 |-------|------------|---------|---------|
-| `/reverse` | `lat`, `lng` | `200` ReverseResult | `400` missing or non-numeric |
-| `/lookup` | `adcode` | `200` ReverseResult | `404` unknown |
-| `/search` | `q`; optional `level`, `province`, `city`, `exact=1` | `200` Region[] | `400` missing `q` |
+| `/reverse` | `lat`, `lng` | `200` ReverseResult | `400` missing, non-numeric, `NaN`/`Inf`, or past ±90/±180 |
+| `/lookup` | `adcode` | `200` ReverseResult | `400` missing `adcode`; `404` unknown |
+| `/search` | `q`; optional `level`, `province`, `city`, `exact=1` | `200` Region[] (`[]` when empty) | `400` missing `q` or invalid `level` |
 | `/regions` | `level` | `200` Region[] | `400` invalid level |
 | `/tree` | — | `200` TreeNode[] | — |
 | `/healthz` | — | `200` `{"status":"ok","version":"…"}` | — |
@@ -204,8 +215,16 @@ take care when building URLs by hand).
 
 - The server is stateless and the data read-only, so it scales horizontally;
   each instance holds about 30 MB resident
-- `ReadHeaderTimeout` is 5 s; no other timeouts are set — behind a reverse proxy,
-  let the proxy own them
+- Timeouts: `ReadHeaderTimeout` 5 s, `ReadTimeout` 10 s, `WriteTimeout` 30 s,
+  `IdleTimeout` 120 s. The largest response (`/tree`, ~160 KB) is well inside
+  the write budget; put a reverse proxy in front if you need longer keep-alives
+- All geometry is decoded once at start-up (~100–200 ms), so there is no decode
+  stall on the first request that reaches each region
+- On `SIGTERM` / `SIGINT` the server stops accepting connections, drains
+  in-flight requests (up to 10 s) and exits `0` — the signal a container
+  runtime sends PID 1
+- `--addr` defaults to `:8080`, i.e. every interface; use `--addr 127.0.0.1:8080`
+  to try it locally
 - The image runs as `nobody` (uid 65534) on `scratch`, with no shell; to debug,
   run a subcommand directly with `docker run ... reverse ...`
 - `/healthz` is intended as the readiness probe

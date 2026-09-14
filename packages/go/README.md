@@ -52,7 +52,9 @@ func main() {
 }
 ```
 
-A `GeoTool` is safe for concurrent reads once `New` returns, but `Reverse` decodes geometry lazily — under heavy concurrency, hold one instance per goroutine or add your own lock.
+A `GeoTool` is safe for concurrent use from any number of goroutines once `New` or `Open` returns. Geometry is decoded lazily, one region at a time, and each decode is guarded so concurrent first requests for the same polygon wait on one decode rather than race. A long-running server can call `PreloadGeometry()` once at start-up to take the whole ~1M-vertex parse (~100–200 ms) up front instead of as a stall on the first request to each region.
+
+`Reverse`, `ReverseBatch`, `IsInChina` and `IsInRegion` panic with `ErrNoGeometry` on a dataset that carries no geometry (the `mini` tier); the other methods work on any tier.
 
 ## API
 
@@ -177,8 +179,13 @@ func main() {
 }
 ```
 
-`GeoTool` 在 `New` 返回后可并发读取，但 `Reverse` 会惰性解码几何 —— 高并发下请每个
-goroutine 持有一个实例，或自行加锁。
+`GeoTool` 在 `New` / `Open` 返回后可被任意数量的 goroutine 并发使用。几何按区划惰性解码，
+每个区划的解码有同步保护：同一多边形的并发首次请求会等待同一次解码，而不是互相竞争。
+常驻服务可以在启动时调用一次 `PreloadGeometry()`，把约 100 万顶点的解析（约 100–200 ms）
+一次付清，避免每个区划首次被访问时的停顿。
+
+`Reverse` / `ReverseBatch` / `IsInChina` / `IsInRegion` 在没有几何的数据集（`mini` 档）上
+以 `ErrNoGeometry` 为值 panic；其余方法在任何档位都可用。
 
 ## API
 

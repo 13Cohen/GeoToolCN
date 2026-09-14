@@ -1,8 +1,17 @@
+# Only packages/go is COPYed, but the whole context is still sent to the
+# builder. Keep the 28 MB of GeoJSON, the local credentials and the build
+# leftovers out of it.
 **/node_modules
 **/__pycache__
 **/*.pyc
+*.egg-info
 .git
+.env
+.venv
+dist
+build
 conformance/*.jsonl
+GeoToolCN/data/*.geojson
 reference/
 docs/
 tests/

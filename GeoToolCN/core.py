@@ -10,8 +10,10 @@ import os
 from dataclasses import dataclass
 from typing import Sequence
 
-from ._gtc import LEVELS, GTCData
+from ._gtc import LEVELS, GeometryUnavailable, GTCData, GTCFormatError
 from ._hierarchy import MERGED_PREFIXES
+
+__all__ = ["GeoTool", "Region", "ReverseResult", "GTCFormatError", "GeometryUnavailable"]
 
 _DEFAULT_DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 _DEFAULT_GTC = os.path.join(_DEFAULT_DATA_DIR, "china.full.gtc")
@@ -43,24 +45,69 @@ class GeoTool:
     Parameters
     ----------
     data_dir : str, optional
-        Path to a ``.gtc`` file, or a directory containing one.  Defaults to
-        the bundled dataset.  For compatibility the parameter keeps its old
-        name; a directory of GeoJSON is no longer accepted (see
+        Path to a ``.gtc`` file, or a directory containing one (``china.full.gtc``
+        is tried first, then ``china.lite.gtc``, then ``china.mini.gtc``).
+        Defaults to the bundled dataset.  For compatibility the parameter
+        keeps its old name; a directory of GeoJSON is no longer accepted (see
         ``MIGRATION_v3.md``).
+    verify_checksums : bool
+        Check every section's CRC-32 while loading.  Off by default because
+        the bundled file was verified when it was built; turn it on for a
+        file that arrived over a network or from a build you do not trust.
+
+    Raises
+    ------
+    FileNotFoundError
+        No ``.gtc`` at the given path.
+    GTCFormatError
+        The file is not a readable ``.gtc`` (wrong magic, unsupported format
+        version, truncated, or — with ``verify_checksums`` — a bad CRC).
+
+    Notes
+    -----
+    The dataset is memory-mapped.  The instance can be used as a context
+    manager, or closed explicitly with :meth:`close`, to release the mapping
+    deterministically; otherwise it is released when the instance is
+    garbage-collected.
+
+    ``reverse``, ``reverse_batch``, ``is_in_china`` and ``is_in_region`` need
+    geometry and raise :class:`GeometryUnavailable` on a dataset that carries
+    none (the ``mini`` tier, SPEC §4.1).
     """
 
-    def __init__(self, data_dir: str | None = None) -> None:
-        path = data_dir or _DEFAULT_GTC
+    _CANDIDATE_FILES = ("china.full.gtc", "china.lite.gtc", "china.mini.gtc")
+
+    def __init__(
+        self, data_dir: str | None = None, *, verify_checksums: bool = False
+    ) -> None:
+        path = os.fspath(data_dir) if data_dir is not None else _DEFAULT_GTC
         if os.path.isdir(path):
-            candidate = os.path.join(path, "china.full.gtc")
-            if not os.path.exists(candidate):
+            for name in self._CANDIDATE_FILES:
+                candidate = os.path.join(path, name)
+                if os.path.exists(candidate):
+                    path = candidate
+                    break
+            else:
                 raise FileNotFoundError(
-                    f"no china.full.gtc in {path!r}. Version 3 reads a .gtc "
-                    f"binary rather than a directory of GeoJSON; build one with "
-                    f"`python pipeline/build_gtc.py`."
+                    f"no .gtc in {path!r} (looked for "
+                    f"{', '.join(self._CANDIDATE_FILES)}). Version 3 reads a "
+                    f".gtc binary rather than a directory of GeoJSON; build one "
+                    f"with `python pipeline/build_gtc.py`."
                 )
-            path = candidate
-        self._data = GTCData(path)
+        self._data = GTCData(path, verify_checksums=verify_checksums)
+
+    def close(self) -> None:
+        """Release the memory-mapped dataset.  Idempotent.
+
+        Every method raises ``ValueError`` afterwards.
+        """
+        self._data.close()
+
+    def __enter__(self) -> GeoTool:
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
 
     # ------------------------------------------------------------------
     # Internal helpers

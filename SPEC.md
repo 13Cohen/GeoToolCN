@@ -97,7 +97,12 @@
 这类自相矛盾的结果。
 
 > `full` / `lite` 档若不含城市图层几何（见 §4.1），第 2 步中的 `city` 恒为空。
-> 这是已登记的差异 `DIV-004`，实测发生率 0.023%。
+> 这是已登记的差异 `DIV-101`，实测发生率 0.023%。
+
+**非有限坐标。** `lat` 或 `lng` 为 NaN、+Inf、-Inf 时，视为不在任何格子内，
+直接返回三者皆空的结果——不抛错。批量输入里常混有缺失值（pandas 的 NaN），
+一个坏点不应让整批失败。`is_in_china` / `is_in_region` 对同样的输入返回 false。
+JSON 无法表达 NaN，一致性用例覆盖不到这条，各实现须自行用单元测试钉住。
 
 ### 2.2 `reverse_batch(coords) -> ReverseResult[]`
 
@@ -313,7 +318,14 @@ for i in 0..n-1:
 | 2 | `full` | + 1e-5 几何 + 0.05° 网格 | **5.95 MB** |
 
 `mini` 档支持除 `reverse` / `reverse_batch` / `is_in_china` / `is_in_region` 外的全部 API。
-调用需要几何的 API 时应抛出明确错误，而不是返回空结果。
+调用需要几何的 API 时应抛出明确错误，而不是返回空结果：Python 抛 `GeometryUnavailable`，
+Node 抛 `GeometryUnavailable`，Go 以 `ErrNoGeometry` 为值 panic（这些方法的签名不带 error，
+而"拿 mini 档做几何查询"是编程错误，不是坏输入）。
+
+**损坏的文件。** 魔数不对、格式版本不支持、节表或节内容越出文件末尾、必需的节缺失、
+META 记录数与节长度不符、NAMES/GEOM_INDEX 偏移越界——都必须在打开时以各语言的
+格式错误类型报出（`GTCFormatError` / `GTCFormatError` / `*FormatError`），
+不得让截断文件走到解码器深处才以越界访问的形式失败。
 
 ### 4.2 文件头（32 字节）
 

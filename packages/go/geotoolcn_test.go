@@ -4,7 +4,11 @@ package geotoolcn
 // these exist so `go test` says something useful on its own.
 
 import (
+	"encoding/binary"
+	"encoding/json"
+	"errors"
 	"math"
+	"strings"
 	"testing"
 )
 
@@ -144,6 +148,37 @@ func TestTreeHasOnePathPerDistrict(t *testing.T) {
 	}
 }
 
+func TestTreeNodeMarshalsTheSameByValueAndByPointer(t *testing.T) {
+	tree, err := GetAdministrativeTree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var taiwan *TreeNode
+	for _, p := range tree {
+		if p.Value == "710000" {
+			taiwan = p
+		}
+	}
+	if taiwan == nil || taiwan.Children == nil {
+		t.Fatal("台湾省 should be a childless province, not a leaf")
+	}
+	byPtr, _ := json.Marshal(taiwan)
+	byVal, _ := json.Marshal(*taiwan)
+	embedded, _ := json.Marshal(struct{ Node TreeNode }{*taiwan})
+	if string(byPtr) != string(byVal) || !strings.Contains(string(embedded), `"children":[]`) {
+		t.Errorf("pointer %s\nvalue   %s\nembedded %s", byPtr, byVal, embedded)
+	}
+	leaf := taiwan
+	for _, p := range tree {
+		if p.Value == "110000" {
+			leaf = p.Children[0].Children[0]
+		}
+	}
+	if out, _ := json.Marshal(*leaf); strings.Contains(string(out), "children") {
+		t.Errorf("leaf by value should omit children: %s", out)
+	}
+}
+
 func TestListRegionsSortedAndValidated(t *testing.T) {
 	geo := newTool(t)
 	regions, err := geo.ListRegions("district")
@@ -184,4 +219,114 @@ func BenchmarkReverse(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		geo.Reverse(39.9042, 116.4074)
 	}
+}
+
+// TestConcurrentReverseMatchesSequential is the regression test for the
+// geometry-cache race: before it was guarded, two goroutines decoding the same
+// polygon could observe the "decoded" flag with an empty cache slot and answer
+// "not inside". Run with -race to catch the data race itself; without it, this
+// still catches the wrong answers.
+func TestConcurrentReverseMatchesSequential(t *testing.T) {
+	// Grid of points dense enough to touch mixed cells in every province.
+	var pts [][2]float64
+	for lat := 18.0; lat < 54; lat += 0.35 {
+		for lng := 73.0; lng < 136; lng += 0.35 {
+			pts = append(pts, [2]float64{lat, lng})
+		}
+	}
+	want := newTool(t).ReverseBatch(pts)
+
+	// A fresh instance so every polygon is decoded under contention.
+	geo := newTool(t)
+	const workers = 16
+	got := make([][]ReverseResult, workers)
+	done := make(chan int, workers)
+	for w := 0; w < workers; w++ {
+		go func(w int) {
+			got[w] = geo.ReverseBatch(pts)
+			done <- w
+		}(w)
+	}
+	for w := 0; w < workers; w++ {
+		<-done
+	}
+	for w := 0; w < workers; w++ {
+		for i := range pts {
+			if code(got[w][i].District) != code(want[i].District) {
+				t.Fatalf("worker %d point %v: got %s, sequential %s",
+					w, pts[i], code(got[w][i].District), code(want[i].District))
+			}
+		}
+	}
+}
+
+func code(r *Region) string {
+	if r == nil {
+		return "<nil>"
+	}
+	return r.Code
+}
+
+func TestNonFiniteCoordinatesAreOutside(t *testing.T) {
+	geo := newTool(t)
+	for _, c := range [][2]float64{
+		{math.NaN(), 116.4}, {39.9, math.NaN()}, {math.Inf(1), 116.4}, {39.9, math.Inf(-1)},
+	} {
+		if r := geo.Reverse(c[0], c[1]); r.Province != nil || r.City != nil || r.District != nil {
+			t.Errorf("Reverse(%v) = %+v, want empty", c, r)
+		}
+		if geo.IsInChina(c[0], c[1]) {
+			t.Errorf("IsInChina(%v) = true", c)
+		}
+	}
+}
+
+func TestTruncatedFileIsAFormatError(t *testing.T) {
+	// Cut at several depths: inside the header, inside the section table,
+	// and inside a section body. Each must be a FormatError, never a panic.
+	for _, n := range []int{0, 8, 31, 32, 100, 4096, len(embeddedDataset) / 2} {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("%d bytes: panic %v", n, r)
+				}
+			}()
+			_, err := newGTCData(embeddedDataset[:n])
+			var fe *FormatError
+			if !errors.As(err, &fe) {
+				t.Errorf("%d bytes: err = %v, want *FormatError", n, err)
+			}
+		}()
+	}
+}
+
+func TestNoGeometryPanicsWithErrNoGeometry(t *testing.T) {
+	// Build a "mini" view of the embedded file: same sections, GEOM emptied,
+	// grid step zeroed — both as a real mini build writes them. The reader
+	// takes len(geomBlob) == 0 as the no-geometry marker (SPEC §4.1).
+	raw := append([]byte(nil), embeddedDataset...)
+	binary.LittleEndian.PutUint32(raw[24:], 0)
+	sectionCount := int(binary.LittleEndian.Uint16(raw[12:]))
+	for i := 0; i < sectionCount; i++ {
+		base := 32 + 24*i
+		if int(binary.LittleEndian.Uint16(raw[base:])) == sectionGeom {
+			binary.LittleEndian.PutUint64(raw[base+16:], 0)
+		}
+	}
+	d, err := newGTCData(raw)
+	if err != nil {
+		t.Fatalf("newGTCData: %v", err)
+	}
+	geo := &GeoTool{data: d}
+
+	if r := geo.GetRegion("110000"); r == nil || r.Name != "北京市" {
+		t.Fatalf("name lookups must still work without geometry, got %+v", r)
+	}
+	defer func() {
+		if r := recover(); r != ErrNoGeometry {
+			t.Fatalf("recover() = %v, want ErrNoGeometry", r)
+		}
+	}()
+	geo.Reverse(39.9, 116.4)
+	t.Fatal("Reverse returned on a dataset with no geometry")
 }

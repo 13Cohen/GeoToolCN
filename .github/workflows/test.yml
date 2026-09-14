@@ -264,7 +264,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.22"
+          go-version: "stable"
 
       - name: Install
         run: |
@@ -308,16 +308,24 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.22"
+          go-version: "stable"
 
-      - name: Sync the dataset, vet and test
-        working-directory: packages/go
-        env:
-          CGO_ENABLED: "0"
+      # The committed copy under packages/go/data is what `go get` serves.
+      # Compare it before sync-data.sh overwrites it, or a stale copy would be
+      # tested as if it were current and only show up after a release.
+      - name: The Go module's dataset is the one the repository ships
         run: |
-          bash scripts/sync-data.sh
+          cmp GeoToolCN/data/china.full.gtc packages/go/data/china.full.gtc
+          cmp GeoToolCN/data/china_admin.json packages/go/data/china_admin.json
+
+      - name: Vet and test
+        working-directory: packages/go
+        run: |
           go vet ./...
-          go test ./...
+          # -race needs cgo, so this job is the one place CGO stays on. The
+          # geometry cache is filled lazily from whichever goroutine gets
+          # there first; the race detector is what caught it being unguarded.
+          go test -race ./...
 
       # No cgo is the point: it is what keeps cross-compilation working, which
       # the Go ecosystem expects of a library like this.

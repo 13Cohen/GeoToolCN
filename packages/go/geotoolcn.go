@@ -60,9 +60,13 @@ type SearchOptions struct {
 var adcodePattern = regexp.MustCompile(`^\d{6}$`)
 var digitsPattern = regexp.MustCompile(`^\d+$`)
 
-// GeoTool answers geocoding queries. Safe for concurrent reads after New
-// returns, except that Reverse lazily decodes geometry; use one per goroutine
-// or guard it if you need concurrency.
+// GeoTool answers geocoding queries. Safe for concurrent use from any number
+// of goroutines once New or Open returns: geometry is decoded lazily, and each
+// region's decode is guarded so that concurrent first requests for the same
+// polygon block on one decode rather than racing on it.
+//
+// Reverse, ReverseBatch, IsInChina and IsInRegion need geometry and panic
+// with ErrNoGeometry on a dataset that carries none (the "mini" tier).
 type GeoTool struct {
 	data *gtcData
 }
@@ -87,6 +91,16 @@ func Open(path string) (*GeoTool, error) {
 		return nil, err
 	}
 	return &GeoTool{data: d}, nil
+}
+
+// PreloadGeometry decodes every region's polygons up front.
+//
+// Not needed for correctness. A lookup decodes only the polygons it touches,
+// which is what keeps cold start at tens of milliseconds; but a long-running
+// server may prefer to pay the ~1M-vertex parse once at start-up rather than
+// as a stall on the first request that reaches each region.
+func (g *GeoTool) PreloadGeometry() {
+	g.data.decodeAll()
 }
 
 func (g *GeoTool) region(index int) *Region {
@@ -247,9 +261,11 @@ func (g *GeoTool) Search(query string, opts SearchOptions) []*Region {
 func (g *GeoTool) filterByParent(regions []*Region, parentLevel, parentQuery string) []*Region {
 	d := g.data
 	var parentCode string
+	// "No parent by that name" is an empty result, not a nil one: nil
+	// marshals to JSON null, and the CLI and HTTP server promise [].
 	if digitsPattern.MatchString(parentQuery) {
 		if d.indexOf(parentQuery, parentLevel) < 0 {
-			return nil
+			return []*Region{}
 		}
 		parentCode = parentQuery
 	} else {
@@ -262,7 +278,7 @@ func (g *GeoTool) filterByParent(regions []*Region, parentLevel, parentQuery str
 			}
 		}
 		if found < 0 {
-			return nil
+			return []*Region{}
 		}
 		parentCode = d.adcodes[found]
 	}
