@@ -160,6 +160,16 @@ python scripts/verify_published.py --only python --version 3.0.0rc1
 | 每日定时 | 包可以在没有任何提交的情况下坏掉：版本被 yank、token 静默失效、tarball 被截断 |
 | workflow_dispatch | 手动指定生态与版本 |
 
+每日运行失败时会**开一个带 `post-release-failure` 标签的 issue**（持续失败则在同一 issue 下追加评论，
+恢复后自动关闭）——Actions 页面里一条红色记录不会有人看见，issue 会。README 上有对应徽章。
+
+同一次每日运行还做两件与包无关的事（`watchdog` job）：
+
+- 调用 API 重新启用自己：GitHub 会在仓库 **60 天没有提交**后自动禁用定时 workflow，
+  而那正是这个守护存在的意义所在的安静期
+- `npm whoami` 确认 `NPM_TOKEN` 仍能认证，并在到期前 14 天开始报错——token 续期后把
+  workflow 里的日期改掉；切到 Trusted Publishing 后删掉这两步
+
 ⚠️ 新增语言时，它的 conformance adapter 必须能指向**已安装的包**，而不是写死源码路径。
 Node 适配器读 `GEOTOOLCN_MODULE` 环境变量；`conformance/adapters/python.py` 之所以存在，
 就是因为 `run.py --adapter python` 会把仓库根插进 `sys.path`，永远测不到已安装的版本。

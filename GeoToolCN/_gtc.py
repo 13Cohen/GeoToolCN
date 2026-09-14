@@ -90,8 +90,10 @@ class GTCData:
         with open(path, "rb") as f:
             try:
                 self._mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
-            except ValueError as exc:  # "cannot mmap an empty file"
-                raise GTCFormatError(f"{path!r} is empty") from exc
+            except (ValueError, OSError) as exc:
+                # "cannot mmap an empty file" — ValueError on POSIX, an
+                # OSError on Windows.
+                raise GTCFormatError(f"{path!r} is empty or cannot be mapped") from exc
         # The mmap holds its own reference to the file, so the descriptor
         # can go now rather than sit open for the life of the instance.
         view = self._view(self._mm)
