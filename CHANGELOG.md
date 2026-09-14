@@ -54,6 +54,26 @@
 - Dockerfile：`ARG VERSION` 注入，镜像不再永远报 `3.0.0`；改为交叉编译而非 QEMU 模拟；
   基础镜像从已停止安全更新的 Go 1.22 升到 1.26；`.dockerignore` 排除 `.env` 与 GeoJSON。
 
+### 发布流程
+
+- **版本号以仓库为准，tag 必须一致。** 以前 `release.yml` 从 tag 反写 `pyproject.toml` /
+  `package.json`，于是 git 里那份永远不是真的（`pip install git+…@py-v3.0.0rc1` 装出来是 3.0.0）。
+  新增 `scripts/release_gate.sh`：tag 不在 master 上、版本与 manifest 不一致、Go 主版本与
+  `go.mod` 后缀不一致，任一情况拒绝发布。
+- **发布前测产物，不测源码树。** Python 装 wheel 进干净 venv、Node 装 `npm pack` 的 tarball、
+  CLI 跑刚编出的二进制，全部走 `verify_published.py --artifact`（新增），与发布后验证同一套检查。
+  以前 `verify` 只在发布之后跑，只能告诉你号已经烧掉了。
+- 预发布：npm 发到 `next`、GitHub Release 标 pre-release、镜像不动 `latest`。以前任何 `cli-v*`
+  都覆盖 `latest`，rc 会成为 `releases/latest`。
+- 镜像加 semver tag（`3.0.1` / `3.0` / `3`）与 `sha-*`；Release 附 `SHA256SUMS` 与构建证明；
+  npm `--provenance`。
+- 所有 action 锁到 commit SHA，`dependabot.yml` 每周更新；三个 workflow 顶层 `contents: read`。
+- `verify_published.py`：`sorted(tags)[-1]` 字典序会把 `3.9.0` 排在 `3.10.0` 后、`rc1` 排在正式版后，
+  改为按版本比较；Go 伪版本检测 `startswith("v0.0.0-")` 在 `/v3` 模块下恒假，改为匹配时间戳-哈希尾；
+  镜像检查加版本比对。
+- `pyproject.toml` 构建依赖 `setuptools>=77`（PEP 639 字符串 `license` 需要）。
+- `release.yml` 删除无 job 处理的 `data-*` 触发器与在分支上无效的 `workflow_dispatch`。
+
 ### 文档
 
 - SPEC §2.1 引用的 `DIV-004` 应为 `DIV-101`。

@@ -12,7 +12,9 @@ Offline geocoding toolkit for Chinese administrative regions. Converts GPS coord
 - **Build**: `pyproject.toml` only (setuptools backend, no setup.py)
 - **CI/CD**: `.github/workflows/test.yml` — tests, conformance matrix and dependency
   assertions on push/PR; `.github/workflows/release.yml` — publishes per ecosystem from
-  its own tag prefix (`py-v*`, `npm-v*`, `cli-v*`, `packages/go/v*`)
+  its own tag prefix (`py-v*`, `npm-v*`, `cli-v*`, `packages/go/v*`) after
+  `scripts/release_gate.sh` and a test of the built artifact. Actions are pinned to
+  commit SHAs; Dependabot moves the pins
 
 ## Commands
 ```bash
@@ -124,8 +126,13 @@ pip install -e .
   the source it was written from and `scripts/check_translations.py` fails CI when they
   drift. After editing a source: update the translation, then run that script with
   `--update`
+- `scripts/release_gate.sh` — first job of `release.yml`: refuses a tag that is not on
+  master, whose version disagrees with the manifest in the tree, or whose Go major does
+  not match the `/vN` in go.mod. The version lives in the repository; the tag must agree
 - `scripts/verify_published.py` — installs each ecosystem from its registry and runs
-  the conformance suite against *that*, not against the working tree. Every other test
+  the conformance suite against *that*, not against the working tree. With `--artifact`
+  it does the same to a local wheel / `npm pack` tarball / directory of binaries, which
+  is how `release.yml` tests what it is about to upload. Every other test
   here measures the source; publishing rewrites the version, applies a `files` whitelist
   and reaches only what git tracks, so it can ship something the tree never had. Each
   check asserts the artifact resolves outside the repository, or it would silently be

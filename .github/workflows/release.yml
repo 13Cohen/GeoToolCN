@@ -6,94 +6,138 @@ on:
       - "py-v*"
       - "npm-v*"
       - "cli-v*"
-      - "data-*"
       # Go needs no publish job: `go get` resolves straight from git tags. The
       # tag shape is dictated by the module living in a subdirectory.
       - "packages/go/v*"
-  workflow_dispatch:
+
+# Nothing here needs to write to the repository except the cli job, which
+# uploads release assets and pushes an image; it says so itself.
+permissions:
+  contents: read
 
 # Each ecosystem publishes from its own tag prefix, so a Python release does not
 # drag the Node package along with it.
 jobs:
-  # Which ecosystem this tag releases, and at what version. Derived once here so
-  # the verification job does not have to repeat the prefix-stripping in four
-  # nested expressions.
+  # Which ecosystem this tag releases, at what version, and whether it is
+  # allowed to: scripts/release_gate.sh refuses a tag that is not on master or
+  # whose version disagrees with the manifest in the tree. Publishing is the
+  # one step that cannot be undone — PyPI never reuses a version, npm locks a
+  # published one after 72 hours — so everything that can be checked is
+  # checked before it, not after.
   plan:
     runs-on: ubuntu-latest
     outputs:
-      ecosystem: ${{ steps.plan.outputs.ecosystem }}
-      version: ${{ steps.plan.outputs.version }}
+      ecosystem: ${{ steps.gate.outputs.ecosystem }}
+      version: ${{ steps.gate.outputs.version }}
+      prerelease: ${{ steps.gate.outputs.prerelease }}
     steps:
-      - id: plan
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+      - id: gate
         env:
           REF_NAME: ${{ github.ref_name }}
-        run: |
-          case "$REF_NAME" in
-            py-v*)          echo "ecosystem=python"; echo "version=${REF_NAME#py-v}"  ;;
-            npm-v*)         echo "ecosystem=node";   echo "version=${REF_NAME#npm-v}" ;;
-            cli-v*)         echo "ecosystem=cli";    echo "version=${REF_NAME#cli-v}" ;;
-            # Go keeps the v: it is part of the version the proxy resolves.
-            packages/go/v*) echo "ecosystem=go";     echo "version=${REF_NAME#packages/go/}" ;;
-            *)              echo "ecosystem=";       echo "version=" ;;
-          esac >> "$GITHUB_OUTPUT"
+        run: bash scripts/release_gate.sh "$REF_NAME" --base origin/master >> "$GITHUB_OUTPUT"
 
   python:
-    if: startsWith(github.ref_name, 'py-v')
+    needs: plan
+    if: needs.plan.outputs.ecosystem == 'python'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-      - name: Set version from the tag
-        env:
-          REF_NAME: ${{ github.ref_name }}
-        run: bash scripts/set_release_version.sh python "${REF_NAME#py-v}"
-      - run: pip install build
+      - run: pip install build twine
       - run: python -m build
+      - run: twine check --strict dist/*
+
+      # Install the wheel that is about to be uploaded into a clean venv and
+      # run every published-package check — including the 38k conformance
+      # cases — against *it*. The tree passed CI; the wheel is a different
+      # object, and 3.0.0rc1 was a wheel that reported the wrong version.
+      - name: Verify the wheel before publishing it
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          python scripts/verify_published.py --only python --version "$VERSION" \
+            --artifact "$(ls dist/*.whl)"
+
       # Uses the PYPI_API_TOKEN already configured for this repository.
       # Trusted publishing (OIDC) would be preferable — no long-lived token —
       # but it needs a one-time publisher configured on PyPI, and omitting the
       # password here silently selects it, so the first release would have
       # failed on a repository that has a perfectly good token.
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}
 
   node:
-    if: startsWith(github.ref_name, 'npm-v')
+    needs: plan
+    if: needs.plan.outputs.ecosystem == 'node'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # npm provenance attestation
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
           registry-url: https://registry.npmjs.org
-      - name: Set version and bundle the dataset
-        env:
-          REF_NAME: ${{ github.ref_name }}
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Bundle the dataset and test
         run: |
-          bash scripts/set_release_version.sh node "${REF_NAME#npm-v}"
           node packages/node/scripts/sync-data.mjs
+          cd packages/node && npm test
+
+      # `npm pack` produces exactly the tarball `npm publish` would upload.
+      # Install that — not the source directory — and run the published-
+      # package checks against it, so a `files` whitelist that drops the
+      # dataset fails here and not on a user's machine.
+      - name: Verify the tarball before publishing it
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          cd packages/node && npm pack --pack-destination /tmp/npm-dist
+          cd "$GITHUB_WORKSPACE"
+          python scripts/verify_published.py --only node --version "$VERSION" \
+            --artifact "$(ls /tmp/npm-dist/*.tgz)"
+
       # NPM_TOKEN expires 2026-12-09 — npm caps write tokens at 90 days, so this
       # job will one day start failing with 401 while the other three ecosystems
       # keep publishing fine. Renewal steps, and how to drop the token entirely
       # in favour of trusted publishing, are in docs/RELEASING.md.
-      - run: npm publish --access public
+      #
+      # A pre-release goes out under the `next` dist-tag: `npm install` with no
+      # version must keep resolving to the last final release.
+      - name: Publish
         working-directory: packages/node
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PRERELEASE: ${{ needs.plan.outputs.prerelease }}
+        run: |
+          tag_args=()
+          [ "$PRERELEASE" = "true" ] && tag_args=(--tag next)
+          npm publish --access public --provenance "${tag_args[@]}"
 
   go:
     # There is nothing to publish — the proxy serves whatever the tag points at.
     # So the tag itself is the release, and this verifies it is not broken:
     # `go get` fetches only what git holds, and go:embed cannot reach outside
     # the module, which is why packages/go/data is committed rather than synced.
-    if: startsWith(github.ref_name, 'packages/go/v')
+    needs: plan
+    if: needs.plan.outputs.ecosystem == 'go'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "stable"
 
@@ -108,6 +152,10 @@ jobs:
             echo "::error::data/china.full.gtc is not committed — go get would fail to build"
             exit 1
           }
+          cmp data/china.full.gtc "$GITHUB_WORKSPACE/GeoToolCN/data/china.full.gtc" || {
+            echo "::error::packages/go/data/china.full.gtc differs from GeoToolCN/data — run packages/go/scripts/sync-data.sh and commit"
+            exit 1
+          }
           go build ./...
           go test ./...
 
@@ -119,26 +167,31 @@ jobs:
           echo "go get $MODULE@${REF_NAME#packages/go/}"
 
   cli:
-    if: startsWith(github.ref_name, 'cli-v')
+    needs: plan
+    if: needs.plan.outputs.ecosystem == 'cli'
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      packages: write
+      contents: write     # release assets
+      packages: write     # ghcr.io
+      id-token: write     # build provenance attestation
+      attestations: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "stable"
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
 
-      - name: Build a static binary per platform
+      - name: Test, then build a static binary per platform
         working-directory: packages/go
         env:
           CGO_ENABLED: "0"
-          REF_NAME: ${{ github.ref_name }}
+          VERSION: ${{ needs.plan.outputs.version }}
         run: |
           bash scripts/sync-data.sh
-          VERSION="${REF_NAME#cli-v}"
-          echo "CLI_VERSION=$VERSION" >> "$GITHUB_ENV"
+          go vet ./... && go test ./...
           mkdir -p /tmp/dist
           for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
             GOOS=${target%/*} GOARCH=${target#*/}
@@ -148,19 +201,53 @@ jobs:
               -ldflags="-s -w -X main.version=$VERSION" \
               -o "/tmp/dist/geotoolcn-$GOOS-$GOARCH$ext" ./cmd/geotoolcn
           done
+          (cd /tmp/dist && sha256sum geotoolcn-* > SHA256SUMS)
           ls -la /tmp/dist
 
-      - uses: softprops/action-gh-release@v2
+      # Run the binaries that are about to become the release through every
+      # subcommand and route, compared against the Python reference in this
+      # checkout — the same checks the daily job runs against the published
+      # release, just before instead of after.
+      - name: Verify the binaries before publishing them
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: python scripts/verify_published.py --only cli --version "$VERSION" --artifact /tmp/dist
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: /tmp/dist/geotoolcn-*
+
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: /tmp/dist/*
+          # A pre-release must not become what releases/latest/download serves.
+          prerelease: ${{ needs.plan.outputs.prerelease == 'true' }}
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/build-push-action@v6
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      # Tags: the full tag name as before, plus semver tags so an image can be
+      # pinned to a minor or major, plus the commit. `latest` only moves for a
+      # final release — a pre-release must not become what `docker run` with
+      # no tag pulls.
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ghcr.io/13cohen/geotoolcn
+          flavor: |
+            latest=${{ needs.plan.outputs.prerelease != 'true' }}
+          tags: |
+            type=raw,value=${{ github.ref_name }}
+            type=semver,pattern={{version}},value=v${{ needs.plan.outputs.version }},enable=${{ needs.plan.outputs.prerelease != 'true' }}
+            type=semver,pattern={{major}}.{{minor}},value=v${{ needs.plan.outputs.version }},enable=${{ needs.plan.outputs.prerelease != 'true' }}
+            type=semver,pattern={{major}},value=v${{ needs.plan.outputs.version }},enable=${{ needs.plan.outputs.prerelease != 'true' }}
+            type=sha
+
+      - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           push: true
@@ -168,10 +255,9 @@ jobs:
           # Same injection as the binaries above: the image must report the
           # version it was cut from, not whatever main.go defaults to.
           build-args: |
-            VERSION=${{ env.CLI_VERSION }}
-          tags: |
-            ghcr.io/13cohen/geotoolcn:latest
-            ghcr.io/13cohen/geotoolcn:${{ github.ref_name }}
+            VERSION=${{ needs.plan.outputs.version }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
 
   # Publishing succeeded — but succeeding at publishing and having published
   # something that works are different claims. This installs the version that
@@ -183,6 +269,8 @@ jobs:
     # Three of the four publish jobs are skipped on any given tag, and a skipped
     # dependency would otherwise skip this too.
     if: ${{ !cancelled() && !failure() && needs.plan.outputs.ecosystem != '' }}
+    permissions:
+      contents: read
     uses: ./.github/workflows/post-release.yml
     with:
       ecosystems: ${{ needs.plan.outputs.ecosystem }}
