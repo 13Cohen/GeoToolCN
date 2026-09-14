@@ -82,7 +82,7 @@ jobs:
       - uses: actions/setup-go@v5
         if: steps.scope.outputs.run == 'true' && matrix.ecosystem == 'go'
         with:
-          go-version: "1.22"
+          go-version: "stable"
 
       - name: Verify the published ${{ matrix.ecosystem }} package
         if: steps.scope.outputs.run == 'true'

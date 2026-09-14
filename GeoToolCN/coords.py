@@ -242,4 +242,6 @@ def distance(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
         math.sin(dlat / 2) ** 2
         + math.cos(lat1_r) * math.cos(lat2_r) * math.sin(dlng / 2) ** 2
     )
-    return _EARTH_RADIUS_KM * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    # Clamped: rounding can push ``a`` a few ulp past 1 for (near-)antipodal
+    # points, and sqrt(1 - a) then raises.  Same form as the Node and Go ports.
+    return _EARTH_RADIUS_KM * 2 * math.asin(min(1.0, math.sqrt(a)))

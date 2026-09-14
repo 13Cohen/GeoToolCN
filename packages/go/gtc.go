@@ -10,9 +10,11 @@ package geotoolcn
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
+	"sync"
 	"unicode/utf8"
 )
 
@@ -44,6 +46,14 @@ const (
 type FormatError struct{ Reason string }
 
 func (e *FormatError) Error() string { return "gtc: " + e.Reason }
+
+// ErrNoGeometry is the panic value raised when a geometry-dependent call —
+// Reverse, IsInChina, IsInRegion — is made against a dataset that carries no
+// geometry (the "mini" tier, SPEC §4.1). Name and adcode lookups still work on
+// such a dataset; the panic marks a programming error rather than a bad input,
+// which is why it is not returned. Node throws GeometryUnavailable and Python
+// raises it for the same reason.
+var ErrNoGeometry = errors.New("gtc: this dataset carries no geometry; use a lite or full .gtc")
 
 type ring struct{ xs, ys []float64 }
 
@@ -81,8 +91,12 @@ type gtcData struct {
 	geomBlob    []byte
 	geomIndex   []uint32
 	hasGeometry bool
-	geomCache   []*geometry
-	geomDecoded []bool
+	// Decoded lazily and exactly once per record. sync.Once gives the
+	// happens-before edge that a plain "decoded" flag did not: without it,
+	// two goroutines racing on the same polygon could see the flag set while
+	// the cache slot was still nil (a wrong answer) or half-built (a panic).
+	geomOnce  []sync.Once
+	geomCache []*geometry
 
 	districtGrid, provinceGrid grid
 }
@@ -122,32 +136,91 @@ func newGTCData(raw []byte) (*gtcData, error) {
 	d.gridStep = float64(binary.LittleEndian.Uint32(raw[24:])) / 1e6
 	d.gridWidth = int(binary.LittleEndian.Uint16(raw[28:]))
 	d.gridHeight = int(binary.LittleEndian.Uint16(raw[30:]))
+	if d.gridStep <= 0 {
+		return nil, &FormatError{"grid step must be positive"}
+	}
 
+	// Every offset below comes from the file, so each is checked before it
+	// is used: a truncated or corrupt file must surface as a FormatError,
+	// not as a slice-bounds panic deep inside the decoder.
+	tableEnd := 32 + 24*sectionCount
+	if tableEnd > len(raw) {
+		return nil, &FormatError{"file truncated inside the section table"}
+	}
 	sections := make(map[int][]byte, sectionCount)
 	for i := 0; i < sectionCount; i++ {
 		base := 32 + 24*i
 		kind := int(binary.LittleEndian.Uint16(raw[base:]))
 		offset := binary.LittleEndian.Uint64(raw[base+8:])
 		length := binary.LittleEndian.Uint64(raw[base+16:])
+		if offset > uint64(len(raw)) || length > uint64(len(raw))-offset {
+			return nil, &FormatError{fmt.Sprintf(
+				"section %d lies outside the file (offset %d, length %d, file %d bytes)",
+				kind, offset, length, len(raw))}
+		}
 		sections[kind] = raw[offset : offset+length]
+	}
+	for _, kind := range []int{
+		sectionMeta, sectionNames, sectionGeom, sectionGeomIndex,
+		sectionGridSolid, sectionGridMixedCells, sectionGridMixedPtrs, sectionGridMixedLists,
+		sectionGridProvSolid, sectionGridProvMixedCells, sectionGridProvMixedPtrs, sectionGridProvMixedLists,
+	} {
+		if _, ok := sections[kind]; !ok {
+			return nil, &FormatError{fmt.Sprintf("section %d is missing", kind)}
+		}
+	}
+
+	meta := sections[sectionMeta]
+	if len(meta) < 4 {
+		return nil, &FormatError{"META section too short"}
+	}
+	recordCount := int(binary.LittleEndian.Uint32(meta))
+	if len(meta) < 4+metaRecordSize*recordCount {
+		return nil, &FormatError{fmt.Sprintf(
+			"META section holds %d bytes, %d records need %d",
+			len(meta), recordCount, 4+metaRecordSize*recordCount)}
 	}
 
 	d.geomBlob = sections[sectionGeom]
 	d.hasGeometry = len(d.geomBlob) > 0
 	d.geomIndex = u32Slice(sections[sectionGeomIndex])
+	if d.hasGeometry {
+		if len(d.geomIndex) != recordCount+1 {
+			return nil, &FormatError{fmt.Sprintf(
+				"GEOM_INDEX has %d entries, expected %d", len(d.geomIndex), recordCount+1)}
+		}
+		for i, off := range d.geomIndex {
+			if int(off) > len(d.geomBlob) || (i > 0 && off < d.geomIndex[i-1]) {
+				return nil, &FormatError{"GEOM_INDEX points outside the GEOM section"}
+			}
+		}
+	}
 
-	d.districtGrid = loadGrid(sections, sectionGridSolid, sectionGridMixedCells,
-		sectionGridMixedPtrs, sectionGridMixedLists)
-	d.provinceGrid = loadGrid(sections, sectionGridProvSolid, sectionGridProvMixedCells,
-		sectionGridProvMixedPtrs, sectionGridProvMixedLists)
+	var err error
+	if d.districtGrid, err = loadGrid(sections, sectionGridSolid, sectionGridMixedCells,
+		sectionGridMixedPtrs, sectionGridMixedLists); err != nil {
+		return nil, err
+	}
+	if d.provinceGrid, err = loadGrid(sections, sectionGridProvSolid, sectionGridProvMixedCells,
+		sectionGridProvMixedPtrs, sectionGridProvMixedLists); err != nil {
+		return nil, err
+	}
 
-	d.buildIndexes(sections[sectionMeta], sections[sectionNames])
+	if err := d.buildIndexes(meta, sections[sectionNames]); err != nil {
+		return nil, err
+	}
 	return d, nil
 }
 
-func loadGrid(sections map[int][]byte, solid, cells, ptrs, lists int) grid {
+func loadGrid(sections map[int][]byte, solid, cells, ptrs, lists int) (grid, error) {
 	solidSection := sections[solid]
+	if len(solidSection) < 4 {
+		return grid{}, &FormatError{fmt.Sprintf("section %d too short", solid)}
+	}
 	runCount := int(binary.LittleEndian.Uint32(solidSection))
+	if len(solidSection) < 4+12*runCount {
+		return grid{}, &FormatError{fmt.Sprintf("section %d truncated", solid)}
+	}
 	flat := u32Slice(solidSection[4 : 4+12*runCount])
 
 	g := grid{
@@ -163,12 +236,28 @@ func loadGrid(sections map[int][]byte, solid, cells, ptrs, lists int) grid {
 		g.runValue[i] = flat[i*3+2]
 	}
 	cellsSection := sections[cells]
+	if len(cellsSection) < 4 {
+		return grid{}, &FormatError{fmt.Sprintf("section %d too short", cells)}
+	}
 	mixedCount := int(binary.LittleEndian.Uint32(cellsSection))
+	if len(cellsSection) < 4+4*mixedCount {
+		return grid{}, &FormatError{fmt.Sprintf("section %d truncated", cells)}
+	}
 	g.mixedCells = u32Slice(cellsSection[4 : 4+4*mixedCount])
-	return g
+	// Every mixed cell owns a [ptr[i], ptr[i+1]) slice of the candidate list.
+	if len(g.mixedPtrs) != mixedCount+1 && !(mixedCount == 0 && len(g.mixedPtrs) == 0) {
+		return grid{}, &FormatError{fmt.Sprintf(
+			"section %d has %d pointers for %d mixed cells", ptrs, len(g.mixedPtrs), mixedCount)}
+	}
+	for _, p := range g.mixedPtrs {
+		if int(p) > len(g.mixedLists) {
+			return grid{}, &FormatError{fmt.Sprintf("section %d points outside section %d", ptrs, lists)}
+		}
+	}
+	return g, nil
 }
 
-func (d *gtcData) buildIndexes(meta, names []byte) {
+func (d *gtcData) buildIndexes(meta, names []byte) error {
 	d.recordCount = int(binary.LittleEndian.Uint32(meta))
 	n := d.recordCount
 
@@ -182,7 +271,7 @@ func (d *gtcData) buildIndexes(meta, names []byte) {
 	d.byName = make(map[string][]int, n)
 	d.levelRanges = make(map[string][2]int, len(Levels))
 	d.geomCache = make([]*geometry, n)
-	d.geomDecoded = make([]bool, n)
+	d.geomOnce = make([]sync.Once, n)
 
 	offset := 4
 	for i := 0; i < n; i++ {
@@ -201,7 +290,11 @@ func (d *gtcData) buildIndexes(meta, names []byte) {
 		if parent != 0 {
 			d.parents[i] = fmt.Sprintf("%06d", parent)
 		}
-		name := string(names[nameOffset : uint32(nameOffset)+uint32(nameLength)])
+		nameEnd := uint64(nameOffset) + uint64(nameLength)
+		if nameEnd > uint64(len(names)) {
+			return &FormatError{fmt.Sprintf("record %d names %d bytes past the NAMES section", i, nameEnd)}
+		}
+		name := string(names[nameOffset:nameEnd])
 		d.names[i] = name
 		d.lats[i] = float64(lat) / 1e6
 		d.lngs[i] = float64(lng) / 1e6
@@ -230,6 +323,7 @@ func (d *gtcData) buildIndexes(meta, names []byte) {
 		}
 	}
 	_ = utf8.RuneCountInString // names are UTF-8 by construction
+	return nil
 }
 
 // indexOf finds a record by adcode, optionally constrained to a level.
@@ -255,12 +349,23 @@ func (d *gtcData) indexOf(code, level string) int {
 //
 // Deferred because most lookups never need it: a solid grid cell answers
 // outright, and eagerly parsing the ~1M vertices would cost seconds.
+// Safe to call from any number of goroutines: the first caller decodes, the
+// rest block on the Once and then read the finished slot.
 func (d *gtcData) geometryAt(index int) *geometry {
-	if d.geomDecoded[index] {
-		return d.geomCache[index]
-	}
-	d.geomDecoded[index] = true
+	d.geomOnce[index].Do(func() { d.geomCache[index] = d.decodeGeometry(index) })
+	return d.geomCache[index]
+}
 
+// decodeAll forces every record's geometry into the cache. A server that
+// cannot afford a ~100 ms stall on the first request for each region calls
+// this once at start-up instead.
+func (d *gtcData) decodeAll() {
+	for i := range d.geomOnce {
+		d.geometryAt(i)
+	}
+}
+
+func (d *gtcData) decodeGeometry(index int) *geometry {
 	start, end := d.geomIndex[index], d.geomIndex[index+1]
 	if start == end {
 		return nil
@@ -315,7 +420,6 @@ func (d *gtcData) geometryAt(index int) *geometry {
 		g.polygons[p] = rings
 	}
 
-	d.geomCache[index] = g
 	return g
 }
 
@@ -365,6 +469,12 @@ func (d *gtcData) contains(index int, qx, qy float64) bool {
 
 func (d *gtcData) locateIn(g *grid, lat, lng float64) int {
 	if !d.hasGeometry {
+		panic(ErrNoGeometry)
+	}
+	// NaN and ±Inf can never lie in a cell. Checked explicitly because
+	// int(math.Floor(NaN)) is implementation-defined in Go and differs
+	// between amd64 and arm64.
+	if math.IsNaN(lat) || math.IsNaN(lng) || math.IsInf(lat, 0) || math.IsInf(lng, 0) {
 		return -1
 	}
 	col := int(math.Floor((lng - d.originLng) / d.gridStep))

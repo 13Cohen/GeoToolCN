@@ -2,6 +2,63 @@
 
 本文件记录 GeoToolCN 的重要变更。版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+运行时缺陷修复，不改变任何一致性用例的答案（38,348 条三方全过，黄金集未重生成）。
+
+### 修复
+
+- **Go：几何缓存的数据竞争。** `geometryAt` 用一个普通布尔位标记"已解码"，先置位后填缓存，
+  没有任何同步。多个 goroutine 同时首次访问同一多边形时，后来者会看到"已解码"但缓存槽为空
+  （答成"不在此区县"）或半构造（`index out of range` panic）。`serve` 恰好就是这种用法。
+  改为每条记录一个 `sync.Once`；新增 `PreloadGeometry()`，`serve` 启动时调用。
+  `go test -race` 与并发对比测试进 `go test`。库文档中"除 `Reverse` 外并发安全"的说法不准确，
+  已改为"并发安全"。
+- **Python：`GeoTool` 无法释放资源。** `GTCData.close()` 在导出的 memoryview 未 release 时关
+  mmap，必抛 `BufferError`；每个实例常驻两个文件描述符直到 GC。现在读完头就关文件，`close()`
+  先 release 各视图，`GeoTool` 提供 `close()`、上下文管理器与 `__del__`；关闭后再调用抛
+  `ValueError`。
+- **NaN / ±Inf 坐标。** Python 抛 `ValueError: cannot convert float NaN to integer`（`reverse_batch`
+  一个坏点炸整批），Go 的 `int(math.Floor(NaN))` 因平台而异。SPEC §2.1 现在规定：非有限坐标
+  等于境外，返回空结果；`is_in_china` / `is_in_region` 返回 false。三方一致。
+- **`distance()` 对近对跖点抛 `math domain error`**（Python）。舍入让 haversine 项略大于 1，
+  `sqrt(1 - a)` 取负。改为与 Node / Go 相同的 `asin(min(1, sqrt(a)))`。
+- **Python 参考实现违反 SPEC §4.6。** 网格定位用 `int()`（向零截断）而非 `floor`；原点以西/以南
+  一个步长内的点会落到第 0 列/行。内置数据在那里没有格子，所以不可观测，但 Go / Node 按 SPEC
+  实现，参考实现与规范不一致本身是缺陷。
+- **损坏的 `.gtc`。** 截断或篡改的文件在三方分别以 `struct.error` / `KeyError`、`RangeError` /
+  `TypeError`、slice-bounds panic 失败。现在打开时校验文件头长度、节表、节偏移、必需节、META
+  记录数、NAMES 与 GEOM_INDEX 偏移、网格指针，统一报各语言的格式错误。`GeoTool` 新增
+  `verify_checksums=` 参数透出 CRC 校验。
+- **Go 的 `mini` 档静默返回空**，SPEC 要求抛错。现在以 `ErrNoGeometry` 为值 panic，与 Node 的
+  `throw` 对应。
+- **Go `TreeNode` 以值方式序列化时丢失 `"children":[]`**（`MarshalJSON` 是指针接收者且字段带
+  `omitempty`）。改为值接收者、去掉 `omitempty`。
+- **Go `Search` 在父级过滤找不到父级时返回 `nil`**，CLI / HTTP 输出 `null` 而文档承诺 `[]`。
+- **Node 坐标转换收到字符串时静默做字符串拼接**（`"116.4" + 0.006` → `"116.40.006"`）。
+  现在对非 `number` 参数抛 `TypeError`，与 Python 一致。
+- `GTCFormatError` / `GeometryUnavailable` 从 `GeoToolCN` 顶层导出。
+
+### CLI / HTTP 服务
+
+- 坐标参数拒绝 `NaN` / `Inf` / 超出 ±90、±180 的值（CLI 退出码 `1`，HTTP `400`），
+  不再与"境外"的空结果混为一谈。
+- 只接受 `GET` / `HEAD`，其它方法 `405`；未知路径 `404`；两者都是 JSON 错误体。
+  `/lookup` 缺少 `adcode` 从 `404` 改为 `400`。`/search` 与 `search` 子命令的 `level` 非法时报错。
+- 加 `ReadTimeout` / `WriteTimeout` / `IdleTimeout`；`SIGTERM` / `SIGINT` 优雅退出（容器 PID 1
+  以前直接以退出码 2 中断在途请求）；先绑定端口再打印"listening"。
+- `search` 子命令：以 `-` 开头的查询串按放错位置的选项处理；未知选项以 JSON 报错、退出码 `1`，
+  不再是 Go 的用法文本与退出码 `2`。
+- `version` / `help` / `tree` / `convert` 不再加载数据集。版本号未注入时从 Go 记录的模块版本
+  读取，`go install ...@v3.x.y` 的二进制不再报硬编码值。
+- Dockerfile：`ARG VERSION` 注入，镜像不再永远报 `3.0.0`；改为交叉编译而非 QEMU 模拟；
+  基础镜像从已停止安全更新的 Go 1.22 升到 1.26；`.dockerignore` 排除 `.env` 与 GeoJSON。
+
+### 文档
+
+- SPEC §2.1 引用的 `DIV-004` 应为 `DIV-101`。
+- SPEC §4.1 补充各语言对 `mini` 档和损坏文件的报错方式。
+
 ## [3.0.0] — 2026-09-10
 
 两件事：**Python 实现移除了 geopandas 与 shapely**，以及**同一套能力现在有了 Node.js、Go

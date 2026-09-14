@@ -22,12 +22,14 @@ from .coords import (
     wgs84_to_bd09,
     wgs84_to_gcj02,
 )
-from .core import GeoTool, Region, ReverseResult
+from .core import GeometryUnavailable, GeoTool, GTCFormatError, Region, ReverseResult
 
 __all__ = [
     "GeoTool",
     "Region",
     "ReverseResult",
+    "GTCFormatError",
+    "GeometryUnavailable",
     "get_administrative_tree",
     # Module-level convenience wrappers (lazy singleton)
     "reverse",

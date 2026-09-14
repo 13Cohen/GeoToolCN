@@ -10,6 +10,7 @@ Format: SPEC.md §4.  Behaviour: SPEC.md §2 and §3.
 """
 from __future__ import annotations
 
+import math
 import mmap
 import struct
 import zlib
@@ -36,6 +37,24 @@ SECTION_GRID_PROV_MIXED_LISTS = 12
 
 _META_RECORD = struct.Struct("<IB3xIIH2xii")
 _META_SIZE = _META_RECORD.size
+_HEADER = struct.Struct("<HBBIH2xiiIHH")
+_SECTION_ENTRY = struct.Struct("<HHIQQ")
+_HEADER_SIZE = 32
+_SECTION_ENTRY_SIZE = 24
+_REQUIRED_SECTIONS = (
+    SECTION_META,
+    SECTION_NAMES,
+    SECTION_GEOM,
+    SECTION_GEOM_INDEX,
+    SECTION_GRID_SOLID,
+    SECTION_GRID_MIXED_CELLS,
+    SECTION_GRID_MIXED_PTRS,
+    SECTION_GRID_MIXED_LISTS,
+    SECTION_GRID_PROV_SOLID,
+    SECTION_GRID_PROV_MIXED_CELLS,
+    SECTION_GRID_PROV_MIXED_PTRS,
+    SECTION_GRID_PROV_MIXED_LISTS,
+)
 
 
 class GTCFormatError(Exception):
@@ -63,11 +82,35 @@ class GTCData:
     """Memory-mapped .gtc file with the lookup tables it needs."""
 
     def __init__(self, path: str, *, verify_checksums: bool = False) -> None:
-        self._file = open(path, "rb")
-        self._mm = mmap.mmap(self._file.fileno(), 0, access=mmap.ACCESS_READ)
-        view = memoryview(self._mm)
+        # Every offset below comes from the file, so each is checked before
+        # use: a truncated or corrupt file must surface as GTCFormatError,
+        # not as struct.error or KeyError from deep inside the reader.
+        self._mm: mmap.mmap | None = None
+        self._views: list[memoryview] = []
+        with open(path, "rb") as f:
+            try:
+                self._mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+            except ValueError as exc:  # "cannot mmap an empty file"
+                raise GTCFormatError(f"{path!r} is empty") from exc
+        # The mmap holds its own reference to the file, so the descriptor
+        # can go now rather than sit open for the life of the instance.
+        view = self._view(self._mm)
 
-        if bytes(view[:4]) != MAGIC:
+        try:
+            self._load(path, view, verify_checksums)
+        except Exception:
+            self.close()
+            raise
+
+    def _view(self, buf) -> memoryview:
+        """Take a memoryview and remember it, so close() can release it."""
+        view = memoryview(buf)
+        self._views.append(view)
+        return view
+
+    def _load(self, path: str, view: memoryview, verify_checksums: bool) -> None:
+        size = len(view)
+        if size < _HEADER_SIZE or bytes(view[:4]) != MAGIC:
             raise GTCFormatError(f"{path!r} is not a .gtc file")
         (
             format_version,
@@ -80,36 +123,68 @@ class GTCData:
             grid_step,
             self.grid_width,
             self.grid_height,
-        ) = struct.unpack_from("<HBBIH2xiiIHH", view, 4)
+        ) = _HEADER.unpack_from(view, 4)
 
         if format_version != SUPPORTED_FORMAT_VERSION:
             raise GTCFormatError(
                 f"format version {format_version} is not supported "
                 f"(this build reads version {SUPPORTED_FORMAT_VERSION})"
             )
+        if grid_step <= 0:
+            raise GTCFormatError("grid step must be positive")
 
         self.scale = 10 ** self.precision
         self.origin_lng = origin_lng / 1_000_000
         self.origin_lat = origin_lat / 1_000_000
         self.grid_step = grid_step / 1_000_000
 
+        table_end = _HEADER_SIZE + _SECTION_ENTRY_SIZE * section_count
+        if table_end > size:
+            raise GTCFormatError("file truncated inside the section table")
         sections: dict[int, memoryview] = {}
         for i in range(section_count):
-            section_type, _, crc, offset, length = struct.unpack_from(
-                "<HHIQQ", view, 32 + 24 * i
+            section_type, _, crc, offset, length = _SECTION_ENTRY.unpack_from(
+                view, _HEADER_SIZE + _SECTION_ENTRY_SIZE * i
             )
-            payload = view[offset : offset + length]
+            if offset > size or length > size - offset:
+                raise GTCFormatError(
+                    f"section {section_type} lies outside the file "
+                    f"(offset {offset}, length {length}, file {size} bytes)"
+                )
+            payload = self._view(view[offset : offset + length])
             if verify_checksums and zlib.crc32(payload) != crc:
                 raise GTCFormatError(f"section {section_type} failed its checksum")
             sections[section_type] = payload
+        for section_type in _REQUIRED_SECTIONS:
+            if section_type not in sections:
+                raise GTCFormatError(f"section {section_type} is missing")
 
         self._names = sections[SECTION_NAMES]
         self._meta = sections[SECTION_META]
+        if len(self._meta) < 4:
+            raise GTCFormatError("META section too short")
         self.record_count = struct.unpack_from("<I", self._meta, 0)[0]
+        if len(self._meta) < 4 + _META_SIZE * self.record_count:
+            raise GTCFormatError(
+                f"META section holds {len(self._meta)} bytes, "
+                f"{self.record_count} records need {4 + _META_SIZE * self.record_count}"
+            )
 
         self._geom = sections[SECTION_GEOM]
         self._geom_index = _u32_array(sections[SECTION_GEOM_INDEX])
         self.has_geometry = len(self._geom) > 0
+        if self.has_geometry:
+            if len(self._geom_index) != self.record_count + 1:
+                raise GTCFormatError(
+                    f"GEOM_INDEX has {len(self._geom_index)} entries, "
+                    f"expected {self.record_count + 1}"
+                )
+            geom_size = len(self._geom)
+            previous = 0
+            for offset in self._geom_index:
+                if offset > geom_size or offset < previous:
+                    raise GTCFormatError("GEOM_INDEX points outside the GEOM section")
+                previous = offset
 
         self._district_grid = self._load_grid(
             sections,
@@ -132,17 +207,36 @@ class GTCData:
     @staticmethod
     def _load_grid(sections, solid_type, cells_type, ptrs_type, lists_type):
         solid = sections[solid_type]
+        if len(solid) < 4:
+            raise GTCFormatError(f"section {solid_type} too short")
         run_count = struct.unpack_from("<I", solid, 0)[0]
+        if len(solid) < 4 + 12 * run_count:
+            raise GTCFormatError(f"section {solid_type} truncated")
         flat = _u32_array(solid[4 : 4 + 12 * run_count])
         cells_section = sections[cells_type]
+        if len(cells_section) < 4:
+            raise GTCFormatError(f"section {cells_type} too short")
         mixed_count = struct.unpack_from("<I", cells_section, 0)[0]
+        if len(cells_section) < 4 + 4 * mixed_count:
+            raise GTCFormatError(f"section {cells_type} truncated")
+        mixed_cells = _u32_array(cells_section[4 : 4 + 4 * mixed_count])
+        mixed_ptrs = _u32_array(sections[ptrs_type])
+        mixed_lists = _u32_array(sections[lists_type])
+        # Every mixed cell owns a [ptr[i], ptr[i+1]) slice of the candidates.
+        if mixed_count and len(mixed_ptrs) != mixed_count + 1:
+            raise GTCFormatError(
+                f"section {ptrs_type} has {len(mixed_ptrs)} pointers "
+                f"for {mixed_count} mixed cells"
+            )
+        if any(p > len(mixed_lists) for p in mixed_ptrs):
+            raise GTCFormatError(f"section {ptrs_type} points outside section {lists_type}")
         return (
             flat[0::3],                                              # run start
             flat[1::3],                                              # run length
             flat[2::3],                                              # run value
-            _u32_array(cells_section[4 : 4 + 4 * mixed_count]),      # mixed cells
-            _u32_array(sections[ptrs_type]),                         # mixed ptrs
-            _u32_array(sections[lists_type]),                        # mixed lists
+            mixed_cells,                                             # mixed cells
+            mixed_ptrs,                                              # mixed ptrs
+            mixed_lists,                                             # mixed lists
         )
 
     # ------------------------------------------------------------------
@@ -171,6 +265,11 @@ class GTCData:
             self.adcodes.append(code)
             self.levels.append(level)
             self.parents.append(f"{parent:06d}" if parent else None)
+            if name_offset + name_length > len(self._names):
+                raise GTCFormatError(
+                    f"record {index} names {name_offset + name_length} bytes "
+                    f"past the NAMES section"
+                )
             name = bytes(self._names[name_offset : name_offset + name_length]).decode(
                 "utf-8"
             )
@@ -228,6 +327,8 @@ class GTCData:
         cached = self._geometry_cache.get(index)
         if cached is not None:
             return cached
+        if self._mm is None:
+            raise ValueError("this GeoTool has been closed")
 
         start = self._geom_index[index]
         end = self._geom_index[index + 1]
@@ -303,8 +404,17 @@ class GTCData:
             raise GeometryUnavailable(
                 "this dataset carries no geometry; use a lite or full .gtc"
             )
-        col = int((lng - self.origin_lng) / self.grid_step)
-        row = int((lat - self.origin_lat) / self.grid_step)
+        if self._mm is None:
+            raise ValueError("this GeoTool has been closed")
+        # NaN and ±Inf can never lie in a cell; int() would raise on them.
+        # SPEC §2.1: a non-finite coordinate is simply outside.
+        if not (math.isfinite(lat) and math.isfinite(lng)):
+            return None
+        # floor, not int(): SPEC §4.6, and what the Node and Go readers do.
+        # int() truncates toward zero, so a point one step west of the origin
+        # would land in column 0 instead of outside the grid.
+        col = math.floor((lng - self.origin_lng) / self.grid_step)
+        row = math.floor((lat - self.origin_lat) / self.grid_step)
         if not (0 <= col < self.grid_width and 0 <= row < self.grid_height):
             return None
         cell_id = row * self.grid_width + col
@@ -340,5 +450,23 @@ class GTCData:
         return self._locate_in(self._province_grid, lat, lng)
 
     def close(self) -> None:
-        self._mm.close()
-        self._file.close()
+        """Release the mapping. Safe to call more than once.
+
+        The section views are slices of the mmap and must be released first:
+        with any of them alive, ``mmap.close()`` raises ``BufferError``.
+        """
+        for view in self._views:
+            view.release()
+        self._views.clear()
+        self._geometry_cache = {}
+        if self._mm is not None:
+            self._mm.close()
+            self._mm = None
+
+    def __del__(self) -> None:
+        # Best effort: instances dropped without close() still release the
+        # mapping promptly instead of at whatever point the GC gets to it.
+        try:
+            self.close()
+        except Exception:  # pragma: no cover - interpreter shutdown
+            pass

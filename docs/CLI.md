@@ -46,8 +46,11 @@ go install github.com/13Cohen/GeoToolCN/packages/go/v3/cmd/geotoolcn@latest
 | 码 | 含义 |
 |----|------|
 | `0` | 成功 |
-| `1` | 运行时失败：坐标无法解析、adcode 不存在、转换不支持 |
+| `1` | 运行时失败：坐标无法解析或超出范围、adcode 不存在、转换不支持、未知的选项 |
 | `2` | 用法错误：缺少子命令、未知子命令 |
+
+坐标只接受 `[-90, 90]` × `[-180, 180]` 内的有限数：`NaN`、`Inf`、`91` 都是退出码 `1`，
+而不是"境外"的空结果——两者对调用方来说不该长得一样。
 
 ## 子命令
 
@@ -108,7 +111,10 @@ $ geotoolcn search 深圳 --exact                    # 精确匹配 "深圳"：0
 $ geotoolcn search 440300                          # 按 adcode
 ```
 
-查询串按**字面**匹配，`.`、`*`、`[` 等不是通配符。无结果时输出 `[]`（不是 `null`），退出码 `0`。
+查询串按**字面**匹配，`.`、`*`、`[` 等不是通配符。无结果时输出 `[]`（不是 `null`），退出码 `0`；
+`--province` / `--city` 指定了不存在的父级也是 `[]`。查询串必须是第一个参数，
+以 `-` 开头的查询串按放错位置的选项处理，退出码 `1`。`--level` 只接受
+`province` / `city` / `district`。
 
 ### `tree`
 
@@ -149,6 +155,8 @@ $ geotoolcn convert wgs84 gcj02 116.4074 39.9042
 ### `version` / `help`
 
 `version` 输出 `{"version": "3.0.0"}`；`help` 输出用法。`--version`、`-v`、`--help`、`-h` 是别名。
+版本号在发布时由 tag 注入；`go install ...@v3.x.y` 装出来的二进制从 Go 记录的模块版本读取；
+从未打 tag 的源码树直接 `go build` 则报 `dev`。这四个子命令都不加载数据集。
 
 ## HTTP 服务
 
@@ -156,14 +164,14 @@ $ geotoolcn convert wgs84 gcj02 116.4074 39.9042
 geotoolcn serve --addr :8080
 ```
 
-所有响应 `Content-Type: application/json; charset=utf-8`，非 ASCII 不转义。
-只支持 `GET`。
+所有响应 `Content-Type: application/json; charset=utf-8`，非 ASCII 不转义——包括错误：
+未知路径是 `404 {"error":…}`，`GET` / `HEAD` 以外的方法是 `405 {"error":…}`。
 
 | 路由 | 参数 | 成功 | 失败 |
 |------|------|------|------|
-| `/reverse` | `lat`、`lng` | `200` ReverseResult | `400` 参数缺失或非数值 |
-| `/lookup` | `adcode` | `200` ReverseResult | `404` 不存在 |
-| `/search` | `q`；可选 `level`、`province`、`city`、`exact=1` | `200` Region[] | `400` 缺少 `q` |
+| `/reverse` | `lat`、`lng` | `200` ReverseResult | `400` 参数缺失、非数值、`NaN`/`Inf`、超出 ±90/±180 |
+| `/lookup` | `adcode` | `200` ReverseResult | `400` 缺少 `adcode`；`404` 不存在 |
+| `/search` | `q`；可选 `level`、`province`、`city`、`exact=1` | `200` Region[]（无结果为 `[]`） | `400` 缺少 `q` 或 `level` 非法 |
 | `/regions` | `level` | `200` Region[] | `400` level 非法 |
 | `/tree` | — | `200` TreeNode[] | — |
 | `/healthz` | — | `200` `{"status":"ok","version":"…"}` | — |
@@ -187,7 +195,12 @@ HTTP/1.1 404 Not Found
 ### 部署提示
 
 - 服务无状态，数据只读，可任意水平扩展；每个实例常驻内存约 30 MB
-- `ReadHeaderTimeout` 为 5 秒，其余超时未设置 —— 放在反向代理后面时由代理控制
+- 超时：`ReadHeaderTimeout` 5 s、`ReadTimeout` 10 s、`WriteTimeout` 30 s、`IdleTimeout` 120 s。
+  最大的响应（`/tree`，约 160 KB）远在写超时之内；需要更长的连接保持时放在反向代理后面
+- 启动时一次性解码全部几何（约 100–200 ms），之后没有首次访问某区划时的解码停顿
+- 收到 `SIGTERM` / `SIGINT` 时停止接受新连接、等在途请求完成（上限 10 s）后以退出码 `0` 退出；
+  这正是容器运行时给 PID 1 发的信号
+- `--addr` 默认 `:8080`，即绑定所有网卡；本机试用请用 `--addr 127.0.0.1:8080`
 - 镜像以 `nobody`（uid 65534）运行，基于 `scratch`，没有 shell；调试请用 `docker run ... reverse ...` 直接跑子命令
 - `/healthz` 用于就绪探针
 

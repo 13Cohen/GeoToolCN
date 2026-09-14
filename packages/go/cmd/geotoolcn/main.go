@@ -8,13 +8,20 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"math"
+	"net"
 	"net/http"
 	"os"
+	"os/signal"
+	"runtime/debug"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	geotoolcn "github.com/13Cohen/GeoToolCN/packages/go/v3"
@@ -37,12 +44,42 @@ const usage = `geotoolcn — 中国行政区划离线地理编码
   geotoolcn reverse 39.9042 116.4074 | jq -r .district.name
 `
 
-var version = "3.0.0"
+// version is injected at release time with -ldflags "-X main.version=...".
+// When it is not — `go install ...@v3.1.0`, a local `go build` — the module
+// version Go recorded in the binary is the next best thing, so the literal
+// here is only what a build from an untagged tree reports.
+var version = "dev"
+
+func init() {
+	if version != "dev" {
+		return
+	}
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		version = strings.TrimPrefix(info.Main.Version, "v")
+	}
+}
 
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)
+	}
+
+	// Subcommands that never touch the dataset skip parsing it. Cheap, but
+	// `version` is what health checks and CI call in a loop.
+	switch os.Args[1] {
+	case "version", "--version", "-v":
+		emit(map[string]string{"version": version})
+		return
+	case "help", "--help", "-h":
+		fmt.Print(usage)
+		return
+	case "tree":
+		cmdTree()
+		return
+	case "convert":
+		cmdConvert(os.Args[2:])
+		return
 	}
 
 	geo, err := geotoolcn.New()
@@ -57,16 +94,8 @@ func main() {
 		cmdLookup(geo, os.Args[2:])
 	case "search":
 		cmdSearch(geo, os.Args[2:])
-	case "tree":
-		cmdTree()
-	case "convert":
-		cmdConvert(os.Args[2:])
 	case "serve":
 		cmdServe(geo, os.Args[2:])
-	case "version", "--version", "-v":
-		emit(map[string]string{"version": version})
-	case "help", "--help", "-h":
-		fmt.Print(usage)
 	default:
 		fmt.Fprintf(os.Stderr, "未知子命令: %s\n\n%s", os.Args[1], usage)
 		os.Exit(2)
@@ -87,17 +116,29 @@ func emit(v any) {
 	}
 }
 
+// parseCoordinate accepts what strconv does, minus the values that are
+// syntactically numbers but never coordinates: NaN, ±Inf and anything past
+// the poles or the antimeridian. Those would otherwise be answered with an
+// empty chain and a 200, indistinguishable from "outside China".
+func parseCoordinate(raw string, limit float64) (float64, error) {
+	v, err := strconv.ParseFloat(raw, 64)
+	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) || math.Abs(v) > limit {
+		return 0, fmt.Errorf("%q 不是 [-%g, %g] 内的数值", raw, limit, limit)
+	}
+	return v, nil
+}
+
 func parseCoords(args []string) (float64, float64) {
 	if len(args) < 2 {
 		fail(fmt.Errorf("需要 <lat> <lng> 两个参数"))
 	}
-	lat, err := strconv.ParseFloat(args[0], 64)
+	lat, err := parseCoordinate(args[0], 90)
 	if err != nil {
-		fail(fmt.Errorf("纬度无效: %s", args[0]))
+		fail(fmt.Errorf("纬度无效: %w", err))
 	}
-	lng, err := strconv.ParseFloat(args[1], 64)
+	lng, err := parseCoordinate(args[1], 180)
 	if err != nil {
-		fail(fmt.Errorf("经度无效: %s", args[1]))
+		fail(fmt.Errorf("经度无效: %w", err))
 	}
 	return lat, lng
 }
@@ -119,7 +160,7 @@ func cmdLookup(geo *geotoolcn.GeoTool, args []string) {
 }
 
 func cmdSearch(geo *geotoolcn.GeoTool, args []string) {
-	fs := flag.NewFlagSet("search", flag.ExitOnError)
+	fs := newFlagSet("search")
 	level := fs.String("level", "", "province|city|district")
 	province := fs.String("province", "", "限定省份（名称或 adcode）")
 	city := fs.String("city", "", "限定城市（名称或 adcode）")
@@ -128,11 +169,43 @@ func cmdSearch(geo *geotoolcn.GeoTool, args []string) {
 		fail(fmt.Errorf("需要 <query> 参数"))
 	}
 	query := args[0]
-	_ = fs.Parse(args[1:])
+	// The query is positional and comes first. A query that looks like a flag
+	// is far more likely a misplaced flag than a region called "--level".
+	if strings.HasPrefix(query, "-") {
+		fail(fmt.Errorf("查询串 %q 以 - 开头；用法: search <query> [--level L] [--province P] [--city C]", query))
+	}
+	if err := fs.Parse(args[1:]); err != nil {
+		fail(err)
+	}
+	if *level != "" && !validLevel(*level) {
+		fail(fmt.Errorf("level 必须是 province、city 或 district，不是 %q", *level))
+	}
 
 	emit(geo.Search(query, geotoolcn.SearchOptions{
 		Level: *level, Province: *province, City: *city, NoFuzzy: *exact,
 	}))
+}
+
+// newFlagSet returns a FlagSet whose errors come back to the caller, so a bad
+// flag is reported as {"error": ...} with exit 1 like every other failure
+// rather than as Go's usage text with exit 2.
+func newFlagSet(name string) *flag.FlagSet {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	fs.SetOutput(nopWriter{})
+	return fs
+}
+
+type nopWriter struct{}
+
+func (nopWriter) Write(p []byte) (int, error) { return len(p), nil }
+
+func validLevel(level string) bool {
+	for _, l := range geotoolcn.Levels {
+		if l == level {
+			return true
+		}
+	}
+	return false
 }
 
 func cmdTree() {
@@ -175,9 +248,15 @@ func cmdConvert(args []string) {
 }
 
 func cmdServe(geo *geotoolcn.GeoTool, args []string) {
-	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	fs := newFlagSet("serve")
 	addr := fs.String("addr", ":8080", "监听地址")
-	_ = fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		fail(err)
+	}
+
+	// A server answers the same regions over and over; paying the full
+	// decode once at start-up beats a stall on the first request to each.
+	geo.PreloadGeometry()
 
 	mux := http.NewServeMux()
 
@@ -188,58 +267,79 @@ func cmdServe(geo *geotoolcn.GeoTool, args []string) {
 		enc.SetEscapeHTML(false)
 		_ = enc.Encode(v)
 	}
-	badRequest := func(w http.ResponseWriter, format string, a ...any) {
-		respond(w, http.StatusBadRequest, map[string]string{
-			"error": fmt.Sprintf(format, a...),
-		})
+	respondError := func(w http.ResponseWriter, status int, format string, a ...any) {
+		respond(w, status, map[string]string{"error": fmt.Sprintf(format, a...)})
 	}
-	floatParam := func(r *http.Request, name string) (float64, bool) {
+	badRequest := func(w http.ResponseWriter, format string, a ...any) {
+		respondError(w, http.StatusBadRequest, format, a...)
+	}
+	coordParam := func(r *http.Request, name string, limit float64) (float64, error) {
 		raw := r.URL.Query().Get(name)
 		if raw == "" {
-			return 0, false
+			return 0, fmt.Errorf("缺少参数 %s", name)
 		}
-		v, err := strconv.ParseFloat(raw, 64)
-		return v, err == nil
+		return parseCoordinate(raw, limit)
+	}
+	// Every route is a read; anything else is 405 with the JSON body the
+	// docs promise, and an unknown path is a JSON 404 rather than net/http's
+	// text/plain default.
+	get := func(pattern string, h func(w http.ResponseWriter, r *http.Request)) {
+		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet && r.Method != http.MethodHead {
+				w.Header().Set("Allow", "GET, HEAD")
+				respondError(w, http.StatusMethodNotAllowed, "只支持 GET")
+				return
+			}
+			h(w, r)
+		})
 	}
 
-	mux.HandleFunc("/reverse", func(w http.ResponseWriter, r *http.Request) {
-		lat, okLat := floatParam(r, "lat")
-		lng, okLng := floatParam(r, "lng")
-		if !okLat || !okLng {
-			badRequest(w, "需要数值参数 lat 与 lng")
+	get("/reverse", func(w http.ResponseWriter, r *http.Request) {
+		lat, errLat := coordParam(r, "lat", 90)
+		lng, errLng := coordParam(r, "lng", 180)
+		if err := errors.Join(errLat, errLng); err != nil {
+			badRequest(w, "%s", strings.ReplaceAll(err.Error(), "\n", "; "))
 			return
 		}
 		respond(w, http.StatusOK, geo.Reverse(lat, lng))
 	})
 
-	mux.HandleFunc("/lookup", func(w http.ResponseWriter, r *http.Request) {
+	get("/lookup", func(w http.ResponseWriter, r *http.Request) {
 		adcode := r.URL.Query().Get("adcode")
+		if adcode == "" {
+			badRequest(w, "缺少参数 adcode")
+			return
+		}
 		result := geo.LookupAdcode(adcode)
 		if result == nil {
-			respond(w, http.StatusNotFound, map[string]string{
-				"error": fmt.Sprintf("未找到 adcode %q", adcode),
-			})
+			respondError(w, http.StatusNotFound, "未找到 adcode %q", adcode)
 			return
 		}
 		respond(w, http.StatusOK, result)
 	})
 
-	mux.HandleFunc("/search", func(w http.ResponseWriter, r *http.Request) {
+	get("/search", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		query := q.Get("q")
 		if query == "" {
 			badRequest(w, "需要参数 q")
 			return
 		}
+		level := q.Get("level")
+		if level != "" && !validLevel(level) {
+			badRequest(w, "level 必须是 province、city 或 district，不是 %q", level)
+			return
+		}
+		exact := q.Get("exact")
 		respond(w, http.StatusOK, geo.Search(query, geotoolcn.SearchOptions{
-			Level:    q.Get("level"),
+			Level:    level,
 			Province: q.Get("province"),
 			City:     q.Get("city"),
-			NoFuzzy:  q.Get("exact") == "1",
+			NoFuzzy:  exact == "1" || exact == "true",
 		}))
 	})
 
-	mux.HandleFunc("/regions", func(w http.ResponseWriter, r *http.Request) {
+	get("/regions", func(w http.ResponseWriter, r *http.Request) {
 		regions, err := geo.ListRegions(r.URL.Query().Get("level"))
 		if err != nil {
 			badRequest(w, "%s", err)
@@ -248,29 +348,61 @@ func cmdServe(geo *geotoolcn.GeoTool, args []string) {
 		respond(w, http.StatusOK, regions)
 	})
 
-	mux.HandleFunc("/tree", func(w http.ResponseWriter, r *http.Request) {
+	get("/tree", func(w http.ResponseWriter, r *http.Request) {
 		tree, err := geotoolcn.GetAdministrativeTree()
 		if err != nil {
-			respond(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			respondError(w, http.StatusInternalServerError, "%s", err)
 			return
 		}
 		respond(w, http.StatusOK, tree)
 	})
 
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+	get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		respond(w, http.StatusOK, map[string]string{"status": "ok", "version": version})
 	})
 
-	announce(*addr)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		respondError(w, http.StatusNotFound, "没有路由 %s", r.URL.Path)
+	})
+
 	server := &http.Server{
-		Addr:    *addr,
 		Handler: mux,
 		// Bounded so an idle or hostile client cannot hold a connection open
-		// while sending headers one byte at a time.
+		// while sending headers one byte at a time, nor keep a response
+		// socket busy indefinitely. The largest response (/tree, ~160 KB)
+		// is well inside the write budget.
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
-	if err := server.ListenAndServe(); err != nil {
+
+	// Bind first, announce second: the log must not claim to be listening on
+	// a port that turned out to be taken.
+	listener, err := net.Listen("tcp", *addr)
+	if err != nil {
 		fail(err)
+	}
+	announce(listener.Addr().String())
+
+	// In the container this process is PID 1 and gets SIGTERM straight from
+	// the runtime; without a handler Go exits with status 2 mid-request.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- server.Serve(listener) }()
+
+	select {
+	case err := <-serveErr:
+		fail(err)
+	case <-ctx.Done():
+		stop()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			fail(err)
+		}
+		fmt.Fprintln(os.Stderr, "geotoolcn: shut down")
 	}
 }
 

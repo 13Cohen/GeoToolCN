@@ -95,7 +95,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.22"
+          go-version: "stable"
 
       - name: Build from only what git tracks
         env:
@@ -128,7 +128,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.22"
+          go-version: "stable"
 
       - name: Build a static binary per platform
         working-directory: packages/go
@@ -138,6 +138,7 @@ jobs:
         run: |
           bash scripts/sync-data.sh
           VERSION="${REF_NAME#cli-v}"
+          echo "CLI_VERSION=$VERSION" >> "$GITHUB_ENV"
           mkdir -p /tmp/dist
           for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
             GOOS=${target%/*} GOARCH=${target#*/}
@@ -164,6 +165,10 @@ jobs:
           context: .
           push: true
           platforms: linux/amd64,linux/arm64
+          # Same injection as the binaries above: the image must report the
+          # version it was cut from, not whatever main.go defaults to.
+          build-args: |
+            VERSION=${{ env.CLI_VERSION }}
           tags: |
             ghcr.io/13cohen/geotoolcn:latest
             ghcr.io/13cohen/geotoolcn:${{ github.ref_name }}

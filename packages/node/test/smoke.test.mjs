@@ -112,3 +112,44 @@ test("a shared instance is reused across module-level calls", () => {
   const explicit = new GeoTool();
   assert.deepEqual(explicit.reverse(31.2304, 121.4737), reverse(31.2304, 121.4737));
 });
+
+test("coordinate conversions reject non-numbers instead of concatenating", () => {
+  // "116.4" + 0.006 is "116.40.006": a string came back with no error.
+  assert.throws(() => wgs84ToGcj02("116.4", "39.9"), TypeError);
+  assert.throws(() => distance("39.9", 116.4, 31.2, 121.5), TypeError);
+  assert.throws(() => gcj02ToWgs84(116.4, undefined), TypeError);
+});
+
+test("non-finite coordinates are outside China, not an error", () => {
+  for (const [lat, lng] of [[NaN, 116.4], [39.9, NaN], [Infinity, 116.4], [39.9, -Infinity]]) {
+    const r = reverse(lat, lng);
+    assert.equal(r.province, null);
+    assert.equal(r.district, null);
+  }
+});
+
+test("a truncated file is a GTCFormatError, never a RangeError", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { GTCData, GTCFormatError } = await import("../src/gtc.js");
+  const url = new URL("../data/china.full.gtc", import.meta.url);
+  const raw = readFileSync(url);
+  for (const cut of [0, 8, 31, 32, 100, 4096, 500_000]) {
+    assert.throws(() => new GTCData(raw.subarray(0, cut)), GTCFormatError, `cut at ${cut}`);
+  }
+});
+
+test("a dataset with no geometry still answers name lookups", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { GTCData, GeometryUnavailable } = await import("../src/gtc.js");
+  const raw = new Uint8Array(readFileSync(new URL("../data/china.full.gtc", import.meta.url)));
+  // Zero the GEOM section's length in the section table (kind 3).
+  const view = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
+  const sectionCount = view.getUint16(12, true);
+  for (let i = 0; i < sectionCount; i += 1) {
+    const base = 32 + 24 * i;
+    if (view.getUint16(base, true) === 3) view.setBigUint64(base + 16, 0n, true);
+  }
+  const data = new GTCData(raw);
+  assert.equal(data.names[data.byCode.get("110000")], "北京市");
+  assert.throws(() => data.locate(39.9, 116.4), GeometryUnavailable);
+});
