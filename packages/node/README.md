@@ -70,7 +70,7 @@ const geo = new GeoTool();
 
 ## 一致性
 
-本实现通过与 Python 参考实现**完全相同**的 34,900+ 条一致性用例。契约见仓库中的 [`SPEC.md`](https://github.com/13Cohen/GeoToolCN/blob/master/SPEC.md)。
+本实现通过与 Python 参考实现**完全相同**的 38,000+ 条一致性用例。契约见仓库中的 [`SPEC.md`](https://github.com/13Cohen/GeoToolCN/blob/master/SPEC.md)。
 
 ## 环境要求
 

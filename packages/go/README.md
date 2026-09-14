@@ -96,7 +96,7 @@ GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build ./...
 
 ## 一致性
 
-本实现通过与 Python、Node 实现**完全相同**的 35,000+ 条一致性用例，包括同一个行政区划树哈希。契约见 [`SPEC.md`](https://github.com/13Cohen/GeoToolCN/blob/master/SPEC.md)。
+本实现通过与 Python、Node 实现**完全相同**的 38,000+ 条一致性用例，包括同一个行政区划树哈希。契约见 [`SPEC.md`](https://github.com/13Cohen/GeoToolCN/blob/master/SPEC.md)。
 
 ## 版本
 
