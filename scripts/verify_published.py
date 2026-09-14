@@ -37,6 +37,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -454,20 +456,77 @@ def verify_cli(version: str | None, work: Path) -> list[Check]:
     native.chmod(0o755)
     checks.append(outside_repo(native, "the CLI binary"))
 
-    proc = run([str(native), "reverse", "39.9042", "116.4074"], cwd=work)
-    ok = proc.returncode == 0 and '"110101"' in proc.stdout
-    checks.append(Check("geotoolcn reverse", ok, proc.stdout.strip()[:200] or proc.stderr.strip()[:200]))
+    # Every subcommand, each compared against the Python implementation in this
+    # checkout — which is the reference the conformance suite is generated
+    # from, so agreeing with it is agreeing with all four ports. The CLI is a
+    # thin wrapper over the Go library; what can go wrong is argument parsing
+    # and JSON shape, and only running the real binary reaches either.
+    sys.path.insert(0, str(REPO))
+    from GeoToolCN import GeoTool, get_administrative_tree  # noqa: PLC0415
+    from GeoToolCN import coords as pycoords  # noqa: PLC0415
+    ref = GeoTool()
 
-    proc = run([str(native), "version"], cwd=work)
-    reported = proc.stdout.strip()
-    checks.append(Check(
-        "version matches the tag",
-        tag.removeprefix("cli-v") in reported,
-        f"{reported!r} vs tag {tag}",
-    ))
+    def cli(*args):
+        proc = run([str(native), *args], cwd=work)
+        try:
+            return proc.returncode, json.loads(proc.stdout) if proc.stdout.strip() else None, proc.stderr
+        except json.JSONDecodeError:
+            return proc.returncode, None, f"not JSON: {proc.stdout[:120]!r}"
 
-    proc = run([str(native), "convert", "wgs84", "gcj02", "116.4074", "39.9042"], cwd=work)
-    checks.append(Check("geotoolcn convert", proc.returncode == 0, proc.stdout.strip()[:120]))
+    def chain(obj):
+        if not isinstance(obj, dict):
+            return None
+        return [(obj.get(k) or {}).get("code") for k in ("province", "city", "district")]
+
+    def pychain(r):
+        return [r.province.code if r.province else None,
+                r.city.code if r.city else None,
+                r.district.code if r.district else None]
+
+    code, body, err = cli("reverse", "39.9042", "116.4074")
+    want = pychain(ref.reverse(39.9042, 116.4074))
+    checks.append(Check("geotoolcn reverse", code == 0 and chain(body) == want,
+                        f"{chain(body) if body else err}"))
+
+    code, body, err = cli("lookup", "419001")           # province-governed
+    want = pychain(ref.lookup_adcode("419001"))
+    checks.append(Check("geotoolcn lookup", code == 0 and chain(body) == want,
+                        f"{chain(body) if body else err}"))
+
+    code, body, err = cli("search", "朝阳区", "--province", "北京市")
+    want = [r.code for r in ref.search("朝阳区", province="北京市")]
+    got = [r.get("code") for r in body] if isinstance(body, list) else None
+    checks.append(Check("geotoolcn search --province", code == 0 and got == want,
+                        f"{got if got is not None else err}"))
+
+    code, body, err = cli("search", "深圳", "--exact")
+    want = [r.code for r in ref.search("深圳", fuzzy=False)]
+    got = [r.get("code") for r in body] if isinstance(body, list) else None
+    checks.append(Check("geotoolcn search --exact", code == 0 and got == want,
+                        f"{got if got is not None else err}"))
+
+    code, body, err = cli("tree")
+    want = get_administrative_tree()
+    checks.append(Check("geotoolcn tree", code == 0 and body == want,
+                        f"{len(body)} provinces" if isinstance(body, list) else err))
+
+    code, body, err = cli("convert", "wgs84", "gcj02", "116.4074", "39.9042")
+    wlng, wlat = pycoords.wgs84_to_gcj02(116.4074, 39.9042)
+    ok = (code == 0 and isinstance(body, dict)
+          and abs(body.get("lng", 0) - wlng) < 1e-9 and abs(body.get("lat", 0) - wlat) < 1e-9)
+    checks.append(Check("geotoolcn convert", ok, f"{body}" if body else err))
+
+    code, body, err = cli("version")
+    reported = (body or {}).get("version", "")
+    checks.append(Check("version matches the tag", reported == tag.removeprefix("cli-v"),
+                        f"{reported!r} vs tag {tag}"))
+
+    # Failure must be an exit code and a JSON error on stderr, with stdout left
+    # empty — anything on stdout would corrupt a `| jq` downstream.
+    code, body, err = cli("lookup", "999999")
+    checks.append(Check("errors go to stderr, stdout stays clean",
+                        code == 1 and body is None and '"error"' in err,
+                        f"exit {code}, stderr {err.strip()[:80]!r}"))
 
     # The HTTP server is the fallback for languages with no binding, so a
     # release that cannot serve is a release that fails those users silently.
@@ -477,27 +536,56 @@ def verify_cli(version: str | None, work: Path) -> list[Check]:
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
     try:
-        body = None
+        def http(path):
+            # Query values are Chinese; urllib sends them raw and the request
+            # never leaves the socket. Encode everything after the `?`.
+            if "?" in path:
+                base, query = path.split("?", 1)
+                path = base + "?" + urllib.parse.quote(query, safe="=&")
+            try:
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=3) as resp:
+                    return resp.status, json.loads(resp.read().decode())
+            except urllib.error.HTTPError as e:
+                return e.code, json.loads(e.read().decode() or "null")
+            except Exception:  # noqa: BLE001
+                return None, None
+
+        up = False
         for _ in range(40):
             time.sleep(0.25)
-            try:
-                with urllib.request.urlopen(
-                    f"http://127.0.0.1:{port}/reverse?lat=39.9042&lng=116.4074", timeout=2
-                ) as resp:
-                    body = resp.read().decode()
+            if http("/healthz")[0] == 200:
+                up = True
                 break
-            except Exception:  # noqa: BLE001 - still starting up
-                continue
-        checks.append(Check(
-            "geotoolcn serve answers",
-            body is not None and "110101" in body,
-            (body or "no response").strip()[:200],
-        ))
+        checks.append(Check("geotoolcn serve comes up", up))
+        if up:
+            routes = [
+                ("/reverse?lat=39.9042&lng=116.4074", 200,
+                 lambda b: chain(b) == pychain(ref.reverse(39.9042, 116.4074))),
+                ("/lookup?adcode=110101", 200,
+                 lambda b: chain(b) == pychain(ref.lookup_adcode("110101"))),
+                ("/search?q=朝阳区&province=北京市", 200,
+                 lambda b: [r["code"] for r in b] == [r.code for r in ref.search("朝阳区", province="北京市")]),
+                ("/regions?level=province", 200,
+                 lambda b: [r["code"] for r in b] == [r.code for r in ref.list_regions("province")]),
+                ("/tree", 200, lambda b: b == get_administrative_tree()),
+                ("/reverse", 400, lambda b: "error" in b),
+                ("/lookup?adcode=999999", 404, lambda b: "error" in b),
+                ("/regions?level=country", 400, lambda b: "error" in b),
+            ]
+            for path, want_status, want_body in routes:
+                status, body = http(path)
+                ok = status == want_status and body is not None and want_body(body)
+                checks.append(Check(f"GET {path.split('?')[0]}"
+                                    + (f" → {want_status}" if want_status != 200 else ""),
+                                    ok, f"HTTP {status}"))
     finally:
         server.terminate()
         server.wait(timeout=10)
 
-    if shutil.which("docker"):
+    # `which docker` is not enough: the CLI can be installed with the daemon
+    # stopped, and that is an environment gap, not a release defect.
+    docker_up = shutil.which("docker") and run(["docker", "info"], timeout=30).returncode == 0
+    if docker_up:
         image = f"ghcr.io/13cohen/geotoolcn:{tag}"
         proc = run(["docker", "run", "--rm", image, "reverse", "39.9042", "116.4074"], timeout=300)
         checks.append(Check(
@@ -506,7 +594,8 @@ def verify_cli(version: str | None, work: Path) -> list[Check]:
             proc.stdout.strip()[:200] or proc.stderr.strip()[-200:],
         ))
     else:
-        checks.append(Check("the container image runs", True, "skipped: docker not available", skipped=True))
+        checks.append(Check("the container image runs", True,
+                            "skipped: docker daemon not available", skipped=True))
     return checks
 
 
