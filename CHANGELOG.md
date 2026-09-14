@@ -73,6 +73,15 @@
   镜像检查加版本比对。
 - `pyproject.toml` 构建依赖 `setuptools>=77`（PEP 639 字符串 `license` 需要）。
 - `release.yml` 删除无 job 处理的 `data-*` 触发器与在分支上无效的 `workflow_dispatch`。
+- **每日守护不再静默。** 定时验证失败时开 issue（`post-release-failure` 标签），恢复后关闭；
+  每次运行重新启用自身，抵消 GitHub「60 天无提交即禁用定时 workflow」的规则；`npm whoami`
+  探活 `NPM_TOKEN` 并在到期前 14 天报错。README 加徽章。
+- **CI 覆盖面。** Python 矩阵加 3.13 / 3.14，加 Windows 与 macOS 各一行（`pyproject.toml`
+  声称 OS Independent 但从未在 Linux 之外跑过）；Node 测 18 / 20 / 22 / 24；新增 `docker` job
+  在每个 PR 里按发布方式构建双平台镜像并运行 amd64（以前 Dockerfile 只在真实 tag 时首次执行）；
+  所有 job 加 `timeout-minutes`；`cancel-in-progress` 只对 PR 生效，master 上每次合并保留自己的结果。
+- `.gitattributes` 关闭行尾转换：Windows 上 `core.autocrlf=true` 会重写 README 的 CRLF 和翻译
+  文件，让 `check_translations.py` 全红。
 
 ### 文档
 

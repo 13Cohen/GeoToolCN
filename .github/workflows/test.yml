@@ -9,17 +9,30 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same PR supersedes the running check. On master every
+# push is a merge that deserves its own result — cancelling there leaves the
+# previous commit showing "cancelled" in the history.
 concurrency:
   group: test-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.10", "3.11", "3.12"]
+        os: [ubuntu-latest]
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
+        # pyproject.toml says "OS Independent"; until now nothing ran anywhere
+        # but Linux. One row each for the mmap reader and the CRLF-sensitive
+        # checks on the two platforms users actually install on.
+        include:
+          - os: windows-latest
+            python-version: "3.12"
+          - os: macos-latest
+            python-version: "3.12"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -28,16 +41,26 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
+      # The geospatial dev extras exist only for rebuilding the data; the
+      # test suite itself needs pytest and nothing else. Installing them on
+      # every row would couple this job to whether geopandas has wheels for a
+      # brand-new Python yet.
       - name: Install package and test dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          pip install -e . pytest
 
       - name: Run test suite
         run: pytest -q
 
+      - name: Line endings and translation hashes survive this platform's checkout
+        run: |
+          python scripts/check_line_endings.py
+          python scripts/check_translations.py
+
   validate-data:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -95,6 +118,7 @@ jobs:
 
   conformance:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -122,6 +146,7 @@ jobs:
 
   no-runtime-dependencies:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -205,6 +230,7 @@ jobs:
   # already holds the version being released, which is the normal case.
   release-paths:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -264,6 +290,7 @@ jobs:
   # means adding a row here and an adapter under conformance/adapters/.
   conformance-matrix:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -308,12 +335,18 @@ jobs:
 
   node:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # package.json says >=18; test the floor and every LTS above it.
+        node-version: ["18", "20", "22", "24"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version: ${{ matrix.node-version }}
 
       - name: Sync the dataset and test
         working-directory: packages/node
@@ -332,6 +365,7 @@ jobs:
 
   go:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -367,3 +401,48 @@ jobs:
             GOOS=${target%/*} GOARCH=${target#*/} go build ./... || exit 1
             echo "built $target"
           done
+
+  # The Dockerfile only ever ran on a real cli-v* tag, which is how every
+  # mistake in it was first found by a release. Build it the way release.yml
+  # does — both platforms, version injected — and run the amd64 image.
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Build for both platforms
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            VERSION=ci-${{ github.sha }}
+          push: false
+
+      - name: Build the native image and run it
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          build-args: |
+            VERSION=ci-${{ github.sha }}
+          load: true
+          tags: geotoolcn:ci
+
+      - name: The image reports the injected version and answers a query
+        run: |
+          docker run --rm geotoolcn:ci version | grep -q '"ci-${{ github.sha }}"'
+          docker run --rm geotoolcn:ci reverse 39.9042 116.4074 | grep -q '"110101"'
+          # serve is the entrypoint's default command; it must come up and
+          # answer on the published port, running as nobody on scratch.
+          cid=$(docker run -d -p 18080:8080 geotoolcn:ci)
+          for i in $(seq 1 40); do
+            curl -sf localhost:18080/healthz >/dev/null && break
+            sleep 0.5
+          done
+          curl -sf 'localhost:18080/reverse?lat=39.9042&lng=116.4074' | grep -q '"110101"'
+          docker stop -t 15 "$cid" >/dev/null
+          # A stopped container that exited 0 drained on SIGTERM; 2 is the Go
+          # runtime's default for an unhandled signal.
+          test "$(docker inspect -f '{{.State.ExitCode}}' "$cid")" = "0"

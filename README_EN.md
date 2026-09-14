@@ -4,6 +4,7 @@
 [![npm](https://img.shields.io/npm/v/@geotoolcn/core)](https://www.npmjs.com/package/@geotoolcn/core)
 [![Go Reference](https://pkg.go.dev/badge/github.com/13Cohen/GeoToolCN/packages/go/v3.svg)](https://pkg.go.dev/github.com/13Cohen/GeoToolCN/packages/go/v3)
 [![Test](https://github.com/13Cohen/GeoToolCN/actions/workflows/test.yml/badge.svg)](https://github.com/13Cohen/GeoToolCN/actions/workflows/test.yml)
+[![Published packages](https://github.com/13Cohen/GeoToolCN/actions/workflows/post-release.yml/badge.svg?event=schedule)](https://github.com/13Cohen/GeoToolCN/actions/workflows/post-release.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Offline geocoding for Chinese administrative divisions — every province, city and

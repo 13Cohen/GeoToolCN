@@ -1,0 +1,7 @@
+# Bytes as committed, on every platform. README.md is deliberately CRLF
+# (scripts/check_line_endings.py guards it) and every translation records
+# the SHA-256 of its source (scripts/check_translations.py); a Windows
+# checkout with core.autocrlf=true would rewrite both and turn every
+# translation check red. Conversion is switched off wholesale rather than
+# per file so a new text file cannot fall through the gaps.
+* -text
