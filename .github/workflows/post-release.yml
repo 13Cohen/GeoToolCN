@@ -22,6 +22,9 @@ on:
       wait:
         type: number
         default: 300
+    secrets:
+      NPM_TOKEN:
+        required: false
 
   workflow_dispatch:
     inputs:
