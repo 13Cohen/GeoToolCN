@@ -25,6 +25,19 @@ bash scripts/set_release_version.sh node   3.0.1      # 改 packages/node/packag
 git tag py-v3.0.1 && git push origin py-v3.0.1
 ```
 
+⚠️ **四个 tag 要分四次 push。** GitHub 对一次 push 超过三个 tag 的操作**不产生任何事件**，
+workflow 静默不跑，Actions 页面什么也看不到。3.1.0rc1 第一次就是这样丢的。
+
+```bash
+for t in py-v3.1.0 npm-v3.1.0 cli-v3.1.0 packages/go/v3.1.0; do
+  git tag -a "$t" master -m "$t" && git push origin "$t"
+done
+```
+
+发布 workflow 一旦 `startup_failure`（没有任何日志），先查可复用 workflow 的权限：
+`release.yml` 的 `verify` job 调用 `post-release.yml`，后者每个 job 声明的权限都必须
+不超过调用方授予的，GitHub 在任何 job 运行前就校验这一点，`actionlint` 查不出来。
+
 `release.yml` 的第一个 job 跑 `scripts/release_gate.sh`，以下任一情况直接拒绝、什么都不发：
 
 - tag 所指的提交不在 `master` 上（从功能分支打的 tag，CI 从没批准过那个提交）
