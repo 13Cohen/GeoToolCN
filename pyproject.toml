@@ -28,10 +28,15 @@ dependencies = []
 [project.optional-dependencies]
 # Only for rebuilding the data and running the differential test against the
 # geopandas reference implementation. Not needed to use the library.
+# Upper bounds on the geospatial stack: build_gtc.py runs geometry through
+# GEOS (make_valid, representative_point), and validate_gtc.py's round-trip
+# already has to tolerate low-bit differences between GEOS builds. A major
+# bump of shapely or geopandas is a deliberate rebuild-and-regenerate event,
+# not something a fresh CI runner should pick up on its own.
 dev = [
-    "geopandas>=0.14",
-    "shapely>=2",
-    "numpy",
+    "geopandas>=0.14,<2",
+    "shapely>=2,<3",
+    "numpy<3",
     "pytest",
     "pyyaml",
 ]

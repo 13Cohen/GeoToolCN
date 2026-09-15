@@ -282,10 +282,33 @@ def check_grid_agrees_with_geometry(data: GTCData, problems: list[Problem]) -> N
         if from_gtc != from_source:
             mismatched.append((round(lat, 6), round(lng, 6), from_source, from_gtc))
 
-    # Quantisation legitimately flips attribution within ~1 m of a boundary
-    # (DIV-104), so a handful is expected; a systematic break is not.
+    # Quantisation legitimately flips attribution within one step (~1.1 m) of
+    # a boundary (DIV-104) — but only there. A rate threshold alone let an
+    # error covering 0.4% of the sampled area through; each mismatch is now
+    # also required to sit within a step of the disputed boundary, which is
+    # the property the divergence registry actually claims.
+    step_degrees = 10 ** -data.precision
+    by_code = dict(zip(codes, geometries))
+    far = []
+    for lat, lng, from_source, from_gtc in mismatched:
+        point = Point(lng, lat)
+        distances = [
+            by_code[c].boundary.distance(point)
+            for c in (from_source, from_gtc)
+            if c in by_code and by_code[c].boundary is not None
+        ]
+        if not distances or min(distances) >= step_degrees:
+            far.append((lat, lng, from_source, from_gtc,
+                        round(min(distances) * _METRES_PER_DEGREE, 2) if distances else None))
     rate = len(mismatched) / GRID_SAMPLE
-    if rate > 0.005:
+    if far:
+        problems.append(Problem(
+            "GRID",
+            f"{len(far)} sampled points are attributed differently from the source "
+            f"geometry while more than one quantisation step from any boundary "
+            f"(lat, lng, source, gtc, metres): {far[:5]}",
+        ))
+    elif rate > 0.005:
         problems.append(Problem(
             "GRID",
             f"index disagrees with source geometry on {len(mismatched)}/{GRID_SAMPLE} "
@@ -295,8 +318,29 @@ def check_grid_agrees_with_geometry(data: GTCData, problems: list[Problem]) -> N
         problems.append(Problem(
             "GRID",
             f"{len(mismatched)}/{GRID_SAMPLE} boundary points differ from source "
-            f"geometry ({rate:.3%}) — expected from quantisation",
+            f"geometry ({rate:.3%}), all within one quantisation step of the "
+            f"boundary — expected",
             "WARN",
+        ))
+
+    # The stored representative point is taken from the source geometry, not
+    # recomputed from the quantised one, so it must still lie in (or within a
+    # few metres of) the source polygon. RFC-002 L0 #6 promised this check
+    # and MAX_REPRESENTATIVE_DRIFT_M sat unused above it.
+    drifted = []
+    for i in range(*data.level_ranges["district"]):
+        code = data.adcodes[i]
+        geometry = by_code.get(code)
+        if geometry is None:
+            continue
+        metres = geometry.distance(Point(data.lngs[i], data.lats[i])) * _METRES_PER_DEGREE
+        if metres > MAX_REPRESENTATIVE_DRIFT_M:
+            drifted.append((code, data.names[i], round(metres, 1)))
+    if drifted:
+        problems.append(Problem(
+            "REPPOINT",
+            f"{len(drifted)} representative points lie more than "
+            f"{MAX_REPRESENTATIVE_DRIFT_M} m outside their source polygon: {drifted[:5]}",
         ))
 
 

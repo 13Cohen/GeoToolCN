@@ -37,8 +37,10 @@ python scripts/validate_data.py
 python conformance/run.py
 python conformance/generate.py
 
-# Differential test against the geopandas oracle (needs the dev extras)
-python conformance/differential.py -n 200000
+# Differential test against the geopandas oracle (needs the dev extras). Runs in
+# CI on every PR; it is the only check independent of the implementation the
+# golden suite is generated from
+python conformance/differential.py -n 200000 --boundary 3
 
 # Rebuild the shipped dataset and validate it
 python pipeline/build_gtc.py
@@ -96,7 +98,10 @@ pip install -e .
   format. Behaviour changes go here first, then into the implementation
 - `conformance/` — language-neutral golden suite (~39k cases). `generate.py` rebuilds it
   from this implementation, `run.py` checks any implementation against it via a
-  line-protocol adapter, `known-divergences.yaml` lists the differences that are allowed
+  line-protocol adapter, `known-divergences.yaml` lists the differences that are allowed.
+  Because the suite comes from this implementation, `differential.py` against the
+  geopandas reference is the independent check; it reads DIV-104's bound from the
+  registry and measures each district disagreement's distance to the boundary
 - `conformance/adapters/` — one file per language binding; adding a language means
   adding an adapter here and a row to the CI matrix
 - `packages/node/` — `@geotoolcn/core`, zero dependencies, ESM. Plain JS with JSDoc plus a

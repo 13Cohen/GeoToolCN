@@ -101,13 +101,23 @@ jobs:
             python scripts/validate_gtc.py "/tmp/china.$tier.gtc"
           done
 
+      # L3 (RFC-002): the only oracle independent of the implementation the
+      # golden suite is generated from. Uniform points plus points along
+      # every district outline; each district disagreement must sit within
+      # one quantisation step of the boundary (DIV-104's bound, read from the
+      # registry) or the run fails.
+      - name: Differential test against the geopandas reference
+        run: python conformance/differential.py -n 200000 --boundary 3
+
       - name: A geometry-free dataset must refuse geometry calls
         run: |
           python - <<'PY'
+          import json
           from GeoToolCN._gtc import GTCData, GeometryUnavailable
+          counts = json.load(open("GeoToolCN/data/DATA_VERSION.json"))["counts"]
           data = GTCData("/tmp/china.mini.gtc")
           assert not data.has_geometry
-          assert data.record_count == 3271
+          assert data.record_count == sum(counts.values()), (data.record_count, counts)
           try:
               data.locate(39.9, 116.4)
           except GeometryUnavailable:
