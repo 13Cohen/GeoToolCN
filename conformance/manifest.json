@@ -7,8 +7,18 @@
     "source_url": "https://datav.aliyun.com/tools/atlas",
     "api_base": "https://geo.datav.aliyun.com/areas_v3/bound",
     "fetched_at": "2026-03-07",
+    "content_sha256": "e9ef3c3cbbd84b829b0ed51aaae5357902a6197b377c68900e0ae365e6b31d1b",
     "original_crs": "GCJ-02",
     "converted_crs": "WGS-84",
+    "conversion": {
+      "method": "single-step inverse of the GCJ-02 offset, per vertex",
+      "residual_m": "0.6 median, up to ~5 at the edges of the covered area",
+      "note": "Every vertex carries this systematic residual on top of the source's own accuracy; sub-metre boundary decisions are noise."
+    },
+    "license": {
+      "code": "MIT (this repository)",
+      "data": "DataV.GeoAtlas terms — not verified by this project; see NOTICE"
+    },
     "counts": {
       "provinces": 34,
       "cities": 363,
