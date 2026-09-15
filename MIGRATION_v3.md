@@ -103,13 +103,55 @@ city_name = result.city.name if result.city else None
 |------|------|
 | `reverse()` / `reverse_batch()` | 返回结构不变 |
 | `search()` | 含 `regex=` 参数在内，行为不变 |
-| `list_regions()` / `get_region()` / `lookup_adcode()` | 不变 |
-| `is_in_region()` | 不变 |
-| `get_administrative_tree()` | 不变（纯标准库，v2.1 起就未依赖 geopandas） |
+| `list_regions()` / `get_region()` | 不变 |
+| `lookup_adcode()` | 3.0.0 不变；**3.1.0 起**对不存在的编码返回 `None`（见下） |
+| `is_in_region()` | 3.0.0 不变；**3.1.0 起**语义改为与 `reverse()` 一致（见下） |
+| `get_administrative_tree()` | 不变（纯标准库，v2.1 起就未依赖 geopandas）；3.1.0 起返回深拷贝 |
 | 坐标转换与 `distance()` | 不变（纯数学） |
 | `Region` / `ReverseResult` 数据类 | 字段与类型不变 |
 
 ---
+
+## 3.1.0 的行为变更
+
+三处，全部登记在 `conformance/known-divergences.yaml`（DIV-106 ~ DIV-108），三种实现同步。
+
+### `is_in_region()` 与 `reverse()` 永远一致（DIV-106）
+
+SPEC §2.9 以前写的是「对该 adcode 的多边形做点在多边形判定」，v2.1 也是这么实现的；
+v3.0.0 的实现却是「网格首命中的区县 == adcode」，两者在源数据的 **2801 对重叠区县**上答案相反。
+3.1.0 把 SPEC 改成后者，并让省级判定也走同一条路：
+
+```python
+# 加格达奇区：行政属黑龙江，却落在内蒙古的省级多边形内
+reverse(50.37295, 124.16537).province.code       # "230000"（不变）
+is_in_region(50.37295, 124.16537, "230000")      # 3.0.0: False → 3.1.0: True
+is_in_region(50.37295, 124.16537, "150000")      # 3.0.0: True  → 3.1.0: False
+```
+
+若你用 `is_in_region` 做地理围栏且围栏是省级，重叠带（约 0.1% 的国土面积）上的答案会翻转到
+与 `reverse()` 一致的一侧。
+
+### `lookup_adcode()` 对不存在的编码返回 `None`（DIV-107）
+
+```python
+lookup_adcode("440399")   # 3.0.0: ReverseResult(province=广东省, city=None, district=None)
+                          # 3.1.0: None
+lookup_adcode("110100")   # 3.0.0: (北京市, 北京市, None) → 3.1.0: None（直辖市没有市级编码）
+```
+
+`result is not None` 现在可以当存在性判断用。若你依赖半截结果里的省，改用
+`get_region(adcode[:2] + "0000")`。
+
+### `search()` 的三处收紧（DIV-108）
+
+- `search("")` / `search("  ")` 返回 `[]`（以前返回全部 3271 条）
+- `city="北京市"` / `city="110000"` 可用（以前返回 `[]`，因为市层没有直辖市）
+- `level="county"` 抛 `ValueError`（以前 `KeyError`）；`search(110000)` 抛 `TypeError`；
+  全角数字 `"１１００００"` 按名称匹配而非 adcode
+
+`get_administrative_tree()` 每次返回深拷贝；`Region` / `ReverseResult` 变为不可变（`frozen=True`），
+可作为 dict key 与 set 成员，原地赋值字段会抛 `FrozenInstanceError`。
 
 ## 升级步骤
 

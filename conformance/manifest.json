@@ -18,10 +18,10 @@
   },
   "counts": {
     "reverse": 16509,
-    "lookup": 3278,
-    "search": 3483,
+    "lookup": 3289,
+    "search": 3496,
     "coords": 8516,
-    "containment": 3299,
+    "containment": 4365,
     "regions": 3262
   },
   "tree_sha256": "620112850ff3782f2a89e6a2ef6460a03baf4f6b335617b8442eff8a5da79b79"

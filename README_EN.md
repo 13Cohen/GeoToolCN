@@ -78,6 +78,7 @@ from GeoToolCN import reverse, search, get_administrative_tree
 
 result = reverse(39.9, 116.4)
 regions = search("朝阳区", province="北京市")   # disambiguate: Beijing and Changchun both have one
+regions = search("朝阳区", city="110000")      # a municipality works as the city too, matching reverse().city
 tree = get_administrative_tree()             # the three-level tree for cascaders
 ```
 
@@ -156,11 +157,19 @@ One division by adcode; province, then city, then district, first hit wins.
 
 ### `geo.lookup_adcode(adcode) → ReverseResult | None`
 
-The full province / city / district chain for an adcode.
+The full province / city / district chain for an adcode, or `None` when the
+level the adcode names does not exist (since 3.1; `440399` used to return a
+partial result holding only the province) — so `is not None` means "this adcode
+exists".
 
 ### `geo.is_in_china(lat, lng) → bool` / `geo.is_in_region(lat, lng, adcode) → bool`
 
-Containment tests.
+Containment tests. `is_in_region` is equivalent to comparing the matching level
+of `reverse()` with `adcode`, so the two always agree — it is **not** a
+point-in-polygon test against that region's polygon: district polygons overlap
+in 2,801 pairs in the source data, a point belongs to one district, and
+`reverse()` has already made that choice. A malformed or unknown `adcode`
+raises `ValueError`.
 
 ### `get_administrative_tree() → list[dict]`
 

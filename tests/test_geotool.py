@@ -138,6 +138,34 @@ class TestSearch:
 # ---------------------------------------------------------------
 
 
+class TestSearchEdgeCases:
+    def test_municipality_as_city_filter(self, geo: GeoTool) -> None:
+        # reverse() and the tree report 北京市 / 110000 as the city; the
+        # filter must accept what they hand back (SPEC §2.4).
+        assert [r.code for r in geo.search("朝阳区", city="北京市")] == ["110105"]
+        assert [r.code for r in geo.search("朝阳区", city="110000")] == ["110105"]
+        assert [r.code for r in geo.search("朝阳区", city="长春市")] == ["220104"]
+        # A province that is not a municipality is still not a city.
+        assert geo.search("朝阳区", city="广东省") == []
+
+    @pytest.mark.parametrize("query", ["", " ", "\t\n"])
+    def test_blank_query_is_empty(self, geo: GeoTool, query: str) -> None:
+        assert geo.search(query) == []
+        assert geo.search(query, level="province") == []
+
+    def test_fullwidth_digits_are_not_an_adcode(self, geo: GeoTool) -> None:
+        assert geo.search("１１００００") == []
+        assert geo.search("110000")[0].code == "110000"
+
+    def test_invalid_level_raises(self, geo: GeoTool) -> None:
+        with pytest.raises(ValueError):
+            geo.search("x", level="county")
+
+    def test_non_string_query_raises(self, geo: GeoTool) -> None:
+        with pytest.raises(TypeError):
+            geo.search(110000)  # type: ignore[arg-type]
+
+
 class TestListRegions:
     def test_provinces(self, geo: GeoTool) -> None:
         provinces = geo.list_regions("province")
@@ -236,14 +264,30 @@ class TestLookupAdcode:
         assert r.city.level == "city"
         assert r.district is not None and "海淀" in r.district.name
 
-    def test_municipality_city_level(self, geo: GeoTool) -> None:
-        """Beijing city: adcode 110100 -> city mirrors province for municipalities."""
-        r = geo.lookup_adcode("110100")
-        assert r is not None
-        assert r.province is not None
-        assert r.city is not None
-        assert r.city.level == "city"
-        assert r.city.name == r.province.name
+    def test_municipality_has_no_city_level_code(self, geo: GeoTool) -> None:
+        """110100 names nothing: a municipality's city *is* the province.
+
+        SPEC §2.7 — the level an adcode's shape implies must exist. 3.0.0
+        answered with province + city, while is_in_region rejected the same
+        code as unknown; the two now agree.
+        """
+        assert geo.lookup_adcode("110100") is None
+        with pytest.raises(ValueError):
+            geo.is_in_region(39.9, 116.4, "110100")
+        r = geo.lookup_adcode("110108")
+        assert r is not None and r.city is not None
+        assert r.city.code == "110000" and r.city.level == "city"
+
+    @pytest.mark.parametrize("code", ["440399", "110199", "419000", "990000"])
+    def test_unknown_at_level_is_none(self, geo: GeoTool, code: str) -> None:
+        # A partial chain (the province alone for 440399) made `is not None`
+        # useless as an existence test.
+        assert geo.lookup_adcode(code) is None
+
+    def test_non_string_is_none(self, geo: GeoTool) -> None:
+        assert geo.lookup_adcode(110108) is None  # type: ignore[arg-type]
+        assert geo.get_region(110000) is None  # type: ignore[arg-type]
+        assert geo.lookup_adcode("１１０１０８") is None
 
     def test_sar(self, geo: GeoTool) -> None:
         """Hong Kong province level."""
@@ -304,3 +348,22 @@ class TestIsInRegion:
     def test_nonexistent_adcode(self, geo: GeoTool) -> None:
         with pytest.raises(ValueError):
             geo.is_in_region(39.9, 116.4, "999999")
+
+    def test_agrees_with_reverse_on_hard_points(self, geo: GeoTool) -> None:
+        """SPEC §2.9: is_in_region is reverse() compared at one level.
+
+        加格达奇区 sits inside 内蒙古's province polygon but is administered
+        by 黑龙江; a point in both 治多县 and 格尔木市's polygons belongs to
+        whichever reverse() picks. Polygon containment gave the opposite
+        answers for all of these.
+        """
+        for lat, lng in [(50.37295, 124.16537), (35.77829, 93.31087),
+                         (30.66457, 122.56396), (30.21028, 105.65155)]:
+            r = geo.reverse(lat, lng)
+            for region in (r.province, r.city, r.district):
+                if region is not None:
+                    assert geo.is_in_region(lat, lng, region.code), (lat, lng, region)
+        assert geo.is_in_region(50.37295, 124.16537, "230000")
+        assert not geo.is_in_region(50.37295, 124.16537, "150000")
+        assert geo.is_in_region(35.77829, 93.31087, "632724")
+        assert not geo.is_in_region(35.77829, 93.31087, "632801")

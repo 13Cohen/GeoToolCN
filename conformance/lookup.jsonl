@@ -3276,3 +3276,14 @@
 {"id":"lkp-bad-004","tags":["invalid"],"in":"999999","out":null}
 {"id":"lkp-bad-005","tags":["invalid"],"in":"110","out":null}
 {"id":"lkp-bad-006","tags":["invalid"],"in":"00000a","out":null}
+{"id":"lkp-bad-007","tags":["invalid"],"in":"１１００００","out":null}
+{"id":"lkp-unk-000","tags":["unknown-at-level"],"in":"440399","out":null}
+{"id":"lkp-unk-001","tags":["unknown-at-level"],"in":"110199","out":null}
+{"id":"lkp-unk-002","tags":["unknown-at-level"],"in":"110100","out":null}
+{"id":"lkp-unk-003","tags":["unknown-at-level"],"in":"419000","out":null}
+{"id":"lkp-unk-004","tags":["unknown-at-level"],"in":"429000","out":null}
+{"id":"lkp-unk-005","tags":["unknown-at-level"],"in":"460399","out":null}
+{"id":"lkp-unk-006","tags":["unknown-at-level"],"in":"659000","out":null}
+{"id":"lkp-unk-007","tags":["unknown-at-level"],"in":"710100","out":null}
+{"id":"lkp-unk-008","tags":["unknown-at-level"],"in":"710101","out":null}
+{"id":"lkp-unk-009","tags":["unknown-at-level"],"in":"990000","out":null}

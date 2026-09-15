@@ -159,7 +159,17 @@ class TestNormalProvince:
 
 
 class TestCaching:
-    def test_same_object_returned(self) -> None:
+    def test_each_call_is_an_independent_copy(self) -> None:
+        # SPEC §2.10: the tree is built once but every caller gets its own
+        # copy. The typical consumer is a cascader that adds `disabled` flags
+        # or prunes branches in place; with a shared object that leaked into
+        # every later call.
         tree1 = get_administrative_tree()
         tree2 = get_administrative_tree()
-        assert tree1 is tree2
+        assert tree1 == tree2
+        assert tree1 is not tree2
+        tree1[0]["label"] = "mutated"
+        tree1[0]["children"].clear()
+        fresh = get_administrative_tree()
+        assert fresh[0]["label"] != "mutated"
+        assert fresh[0]["children"]

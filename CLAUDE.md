@@ -94,7 +94,7 @@ pip install -e .
   source geometry. `--round-trip` also asserts the build is deterministic
 - `SPEC.md` — the cross-language contract: API semantics, tie-breaking rules, GTC binary
   format. Behaviour changes go here first, then into the implementation
-- `conformance/` — language-neutral golden suite (~38k cases). `generate.py` rebuilds it
+- `conformance/` — language-neutral golden suite (~39k cases). `generate.py` rebuilds it
   from this implementation, `run.py` checks any implementation against it via a
   line-protocol adapter, `known-divergences.yaml` lists the differences that are allowed
 - `conformance/adapters/` — one file per language binding; adding a language means

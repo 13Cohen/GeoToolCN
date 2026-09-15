@@ -3481,3 +3481,16 @@
 {"id":"sch-003480","tags":["metachar"],"in":{"query":"["},"out":[]}
 {"id":"sch-003481","tags":["metachar"],"in":{"query":"*"},"out":[]}
 {"id":"sch-003482","tags":["fuzzy","common-substring"],"in":{"query":"市","level":"province"},"out":["110000","120000","310000","500000"]}
+{"id":"sch-003483","tags":["parent-filter","city","merged-prefix"],"in":{"query":"朝阳区","city":"北京市"},"out":["110105"]}
+{"id":"sch-003484","tags":["parent-filter","city","merged-prefix","by-code"],"in":{"query":"朝阳区","city":"110000"},"out":["110105"]}
+{"id":"sch-003485","tags":["parent-filter","city","merged-prefix"],"in":{"query":"东城区","city":"北京市"},"out":["110101"]}
+{"id":"sch-003486","tags":["parent-filter","city","merged-prefix"],"in":{"query":"中西区","city":"香港特别行政区"},"out":["810001"]}
+{"id":"sch-003487","tags":["parent-filter","city","province-not-merged"],"in":{"query":"朝阳区","city":"广东省"},"out":[]}
+{"id":"sch-003488","tags":["parent-filter","city","no-parent"],"in":{"query":"朝阳区","city":"不存在"},"out":[]}
+{"id":"sch-003489","tags":["parent-filter","no-parent"],"in":{"query":"朝阳区","province":"不存在"},"out":[]}
+{"id":"sch-003490","tags":["empty"],"in":{"query":""},"out":[]}
+{"id":"sch-003491","tags":["empty","blank"],"in":{"query":" "},"out":[]}
+{"id":"sch-003492","tags":["empty","blank"],"in":{"query":"\t"},"out":[]}
+{"id":"sch-003493","tags":["empty"],"in":{"query":"","level":"province"},"out":[]}
+{"id":"sch-003494","tags":["fullwidth-digits"],"in":{"query":"１１００００"},"out":[]}
+{"id":"sch-003495","tags":["fullwidth-digits"],"in":{"query":"４４０３００","level":"city"},"out":[]}

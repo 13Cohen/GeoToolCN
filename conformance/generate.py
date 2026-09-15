@@ -52,6 +52,11 @@ FRESHNESS_TOLERANCE = {"coords.jsonl": 1e-9}
 BOUNDARY_PER_DISTRICT = 3
 UNIFORM_SAMPLES = 5000
 OUTSIDE_SAMPLES = 500
+# District polygons overlap in 2,801 pairs in the source data. A point inside
+# both is where "is_in_region means point-in-polygon" and "is_in_region means
+# reverse() says so" (SPEC §2.9) give different answers, so the suite has to
+# hold some — or a port could implement the former and pass.
+OVERLAP_PAIRS = 300
 
 MERGED_PREFIXES = frozenset({"11", "12", "31", "50", "81", "82"})
 
@@ -129,6 +134,35 @@ def boundary_points(geometry, count: int, rng: random.Random):
         return out
     except Exception:
         return []
+
+
+def overlap_points(gdf, count: int):
+    """(lat, lng, code_a, code_b) for a point inside two district polygons.
+
+    Pairs are taken in ascending (code_a, code_b) order and only the first
+    `count` are kept, so the selection is deterministic across machines.
+    """
+    from shapely.strtree import STRtree  # noqa: PLC0415
+
+    geoms = list(gdf.geometry)
+    codes = list(gdf["adcode"].astype(str))
+    tree = STRtree(geoms)
+    pairs = []
+    for i, geom in enumerate(geoms):
+        for j in tree.query(geom, predicate="intersects"):
+            j = int(j)
+            if j <= i:
+                continue
+            inter = geom.intersection(geoms[j])
+            if inter.is_empty or inter.area < 1e-6:
+                continue
+            pairs.append((codes[i], codes[j], inter))
+    pairs.sort(key=lambda t: (t[0], t[1]))
+    out = []
+    for code_a, code_b, inter in pairs[:count]:
+        pt = inter.representative_point()
+        out.append((round(pt.y, 6), round(pt.x, 6), code_a, code_b))
+    return out
 
 
 def compare_against_committed(generated_dir: Path) -> list[str]:
@@ -258,9 +292,26 @@ def main() -> None:
                 "out": region_codes(result) if result else None,
             }
         )
-    for i, bad in enumerate(["", "abc", "12345", "1234567", "999999", "110", "00000a"]):
+    for i, bad in enumerate(["", "abc", "12345", "1234567", "999999", "110", "00000a",
+                             "１１００００"]):
         rows.append(
             {"id": f"lkp-bad-{i:03d}", "tags": ["invalid"], "in": bad, "out": None}
+        )
+    # Well-formed codes that name nothing at the level their shape implies.
+    # 3.0.0 answered these with a partial chain (the province alone for 440399,
+    # province and city for 110199); SPEC §2.7 now says null. Each is computed,
+    # not written down, so the suite states whatever the implementation does —
+    # the point is that they are *in* the suite at all.
+    for i, code in enumerate(["440399", "110199", "110100", "419000", "429000",
+                              "460399", "659000", "710100", "710101", "990000"]):
+        result = geo.lookup_adcode(code)
+        rows.append(
+            {
+                "id": f"lkp-unk-{i:03d}",
+                "tags": ["unknown-at-level"],
+                "in": code,
+                "out": region_codes(result) if result else None,
+            }
         )
     n_lookup = write_jsonl("lookup.jsonl", rows)
 
@@ -324,6 +375,23 @@ def main() -> None:
         ("[", {}, ["metachar"]),
         ("*", {}, ["metachar"]),
         ("市", {"level": "province"}, ["fuzzy", "common-substring"]),
+        # Municipalities have no city layer; the city filter must accept the
+        # province as the city, which is what reverse() and the tree report.
+        ("朝阳区", {"city": "北京市"}, ["parent-filter", "city", "merged-prefix"]),
+        ("朝阳区", {"city": "110000"}, ["parent-filter", "city", "merged-prefix", "by-code"]),
+        ("东城区", {"city": "北京市"}, ["parent-filter", "city", "merged-prefix"]),
+        ("中西区", {"city": "香港特别行政区"}, ["parent-filter", "city", "merged-prefix"]),
+        ("朝阳区", {"city": "广东省"}, ["parent-filter", "city", "province-not-merged"]),
+        ("朝阳区", {"city": "不存在"}, ["parent-filter", "city", "no-parent"]),
+        ("朝阳区", {"province": "不存在"}, ["parent-filter", "no-parent"]),
+        # Empty and blank queries: no results, not every region.
+        ("", {}, ["empty"]),
+        (" ", {}, ["empty", "blank"]),
+        ("\t", {}, ["empty", "blank"]),
+        ("", {"level": "province"}, ["empty"]),
+        # Full-width digits are not an adcode: matched as a name, so no result.
+        ("１１００００", {}, ["fullwidth-digits"]),
+        ("４４０３００", {"level": "city"}, ["fullwidth-digits"]),
     ]:
         add_search(query, tags, **kwargs)
     n_search = write_jsonl("search.jsonl", rows)
@@ -437,7 +505,7 @@ def main() -> None:
             }
         )
         idx += 1
-    for bad in ["xyz", "999999", "", "1234567"]:
+    for bad in ["xyz", "999999", "", "1234567", "110100", "１１００００"]:
         rows.append(
             {
                 "id": f"cnt-{idx:06d}",
@@ -448,6 +516,53 @@ def main() -> None:
             }
         )
         idx += 1
+    # Overlap bands: a point inside two district polygons. Exactly one of the
+    # two answers true (the one reverse() picks, SPEC §2.9/§3.4); a port that
+    # tests the polygon directly answers true for both and fails here.
+    for lat, lng, code_a, code_b in overlap_points(gdf, OVERLAP_PAIRS):
+        for code in (code_a, code_b):
+            rows.append(
+                {
+                    "id": f"cnt-{idx:06d}",
+                    "tags": ["is_in_region", "overlap", "district"],
+                    "fn": "is_in_region",
+                    "in": [lat, lng, code],
+                    "out": geo.is_in_region(lat, lng, code),
+                }
+            )
+            idx += 1
+        # And the two provinces / cities above them, which differ for the
+        # cross-border pairs (兵团 cities inside 新疆 counties, 加格达奇).
+        for code in sorted({code_a[:2] + "0000", code_b[:2] + "0000"}):
+            rows.append(
+                {
+                    "id": f"cnt-{idx:06d}",
+                    "tags": ["is_in_region", "overlap", "province"],
+                    "fn": "is_in_region",
+                    "in": [lat, lng, code],
+                    "out": geo.is_in_region(lat, lng, code),
+                }
+            )
+            idx += 1
+    # Points whose province by reverse() differs from the province polygon
+    # they sit in. is_in_region must agree with reverse(), not the polygon.
+    for lat, lng, note, codes in [
+        (50.37295, 124.16537, "加格达奇区", ["230000", "150000", "232718"]),
+        (30.66457, 122.56396, "嵊泗县", ["330000", "330900", "330922"]),
+        (30.21028, 105.65155, "潼南区", ["500000", "510000"]),
+        (23.7, 121.0, "台湾", ["710000"]),
+    ]:
+        for code in codes:
+            rows.append(
+                {
+                    "id": f"cnt-{idx:06d}",
+                    "tags": ["is_in_region", "reverse-consistent", note],
+                    "fn": "is_in_region",
+                    "in": [lat, lng, code],
+                    "out": geo.is_in_region(lat, lng, code),
+                }
+            )
+            idx += 1
     n_containment = write_jsonl("containment.jsonl", rows)
 
     # ---------------- regions.jsonl ----------------

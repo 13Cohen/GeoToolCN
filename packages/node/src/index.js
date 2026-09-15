@@ -106,13 +106,24 @@ export class GeoTool {
    */
   search(query, options = {}) {
     const { level = null, province = null, city = null, fuzzy = true } = options;
+    if (typeof query !== "string") {
+      throw new TypeError(`query must be a string, got ${typeof query}`);
+    }
+    if (level !== null && !LEVELS.includes(level)) {
+      throw new TypeError(`Invalid level ${JSON.stringify(level)}. Must be one of ${LEVELS}`);
+    }
+    // An empty substring is contained in every name; 3,271 results is never
+    // what a blank search box meant (SPEC §2.3).
+    if (query.trim() === "") return [];
     const data = this.data;
     const levels = level ? [level] : LEVELS;
     const matches = [];
 
     for (const levelName of levels) {
       const [start, end] = data.levelRanges[levelName];
-      if (/^\d+$/.test(query)) {
+      // ASCII digits only: \d would also match nothing else, but the Python
+      // reference once used str.isdigit(), which accepts full-width １１００００.
+      if (/^[0-9]+$/.test(query)) {
         for (let i = start; i < end; i += 1) {
           if (data.adcodes[i] === query) matches.push(i);
         }
@@ -148,20 +159,32 @@ export class GeoTool {
    * islands especially — so a geometric test silently drops valid matches.
    */
   #filterByParent(regions, parentLevel, parentQuery) {
-    const data = this.data;
-    let parentCode;
-    if (/^\d+$/.test(parentQuery)) {
-      if (data.indexOf(parentQuery, parentLevel) === null) return [];
-      parentCode = parentQuery;
-    } else {
-      const [start, end] = data.levelRanges[parentLevel];
-      const candidates = (data.byName.get(parentQuery) ?? []).filter(
-        (i) => i >= start && i < end,
-      );
-      if (!candidates.length) return [];
-      parentCode = data.adcodes[candidates[0]];
+    let parentCode = this.#resolveParent(parentQuery, parentLevel);
+    if (parentCode === null && parentLevel === "city") {
+      // A municipality or SAR has no city layer of its own: the city a caller
+      // means by "北京市" or "110000" is the province, which is what reverse()
+      // and the administrative tree hand back as the city (SPEC §2.4).
+      const asProvince = this.#resolveParent(parentQuery, "province");
+      if (asProvince !== null && MERGED_PREFIXES.has(asProvince.slice(0, 2))) {
+        parentCode = asProvince;
+        parentLevel = "province";
+      }
     }
+    if (parentCode === null) return [];
     return regions.filter((r) => this.#isUnder(r, parentLevel, parentCode));
+  }
+
+  /** The adcode of the region `parentQuery` names at `parentLevel`, or null. */
+  #resolveParent(parentQuery, parentLevel) {
+    const data = this.data;
+    if (/^[0-9]+$/.test(parentQuery)) {
+      return data.indexOf(parentQuery, parentLevel) === null ? null : parentQuery;
+    }
+    const [start, end] = data.levelRanges[parentLevel];
+    const candidates = (data.byName.get(parentQuery) ?? []).filter(
+      (i) => i >= start && i < end,
+    );
+    return candidates.length ? data.adcodes[candidates[0]] : null;
   }
 
   #isUnder(region, parentLevel, parentCode) {
@@ -188,6 +211,9 @@ export class GeoTool {
 
   /** A single region by adcode, searching province → city → district. */
   getRegion(code) {
+    // An int is never an adcode: the leading zero of "010000"-style codes
+    // would be lost, so anything but a string is simply unknown.
+    if (typeof code !== "string") return null;
     for (const level of LEVELS) {
       const region = this.#regionByCode(code, level);
       if (region !== null) return region;
@@ -196,13 +222,17 @@ export class GeoTool {
   }
 
   static #adcodeLevel(adcode) {
-    if (adcode.length !== 6 || !/^\d{6}$/.test(adcode)) return null;
+    if (typeof adcode !== "string" || !/^[0-9]{6}$/.test(adcode)) return null;
     if (adcode.endsWith("0000")) return "province";
     if (adcode.endsWith("00")) return "city";
     return "district";
   }
 
-  /** The full province/city/district chain for a 6-digit adcode. */
+  /**
+   * The full province/city/district chain for a 6-digit adcode, or null when
+   * the adcode is malformed or names no region at the level its shape implies
+   * (SPEC §2.7). `result !== null` therefore means "this adcode exists".
+   */
   lookupAdcode(adcode) {
     const level = GeoTool.#adcodeLevel(adcode);
     if (level === null) return null;
@@ -213,22 +243,19 @@ export class GeoTool {
       return province ? { province, city: null, district: null } : null;
     }
 
-    let city = null;
-    if (MERGED_PREFIXES.has(prefix2)) {
-      city = province ? GeoTool.#provinceAsCity(province) : null;
-    } else if (level === "district") {
+    if (level === "district") {
       const index = this.data.indexOf(adcode, "district");
-      const parent = index === null ? null : this.data.parents[index];
-      city = parent ? this.#regionByCode(parent, "city") : null;
-    } else {
-      city = this.#regionByCode(adcode, "city");
+      return index === null ? null : this.#chainFromDistrict(index);
     }
 
+    // City-shaped code. Municipalities and SARs have no city layer, so a code
+    // like 110100 names nothing and is null here.
+    const city = this.#regionByCode(adcode, "city");
+    if (city === null) return null;
     // Prefecture-level cities with no subdivisions (东莞, 中山, 儋州, 嘉峪关)
-    // appear at both levels under one code, so try either way.
+    // and the province-governed county-level divisions appear at both levels
+    // under one code.
     const district = this.#regionByCode(adcode, "district");
-
-    if (province === null && city === null && district === null) return null;
     return { province, city, district };
   }
 
@@ -239,7 +266,11 @@ export class GeoTool {
     );
   }
 
-  /** @throws {TypeError} if the adcode is malformed or unknown. */
+  /**
+   * Whether the point is inside the region — defined as "the matching level
+   * of reverse() is this adcode" (SPEC §2.9), so the two can never disagree.
+   * @throws {TypeError} if the adcode is malformed or unknown.
+   */
   isInRegion(lat, lng, adcode) {
     const level = GeoTool.#adcodeLevel(adcode);
     if (level === null) throw new TypeError(`Invalid adcode: ${JSON.stringify(adcode)}`);
@@ -247,9 +278,12 @@ export class GeoTool {
       throw new TypeError(`Region not found for adcode ${JSON.stringify(adcode)}`);
     }
 
-    if (level === "province") {
-      // Answer from the province grid: Taiwan has no districts, so routing
-      // this through the district lookup reports false for the whole island.
+    const index = this.data.locate(lat, lng);
+    if (index === null) {
+      if (level !== "province") return false;
+      // No district covers the point — Taiwan is published at province level
+      // only, and coastal gaps leave slivers — so fall back to the province
+      // grid, exactly as reverse() does.
       const provinceIndex = this.data.locateProvince(lat, lng);
       return (
         provinceIndex !== null &&
@@ -257,13 +291,9 @@ export class GeoTool {
       );
     }
 
-    const index = this.data.locate(lat, lng);
-    if (index === null) return false;
     const districtCode = this.data.adcodes[index];
+    if (level === "province") return districtCode.slice(0, 2) === adcode.slice(0, 2);
     if (level === "district") return districtCode === adcode;
-    if (MERGED_PREFIXES.has(adcode.slice(0, 2))) {
-      return districtCode.slice(0, 2) === adcode.slice(0, 2);
-    }
     return this.data.parents[index] === adcode;
   }
 }

@@ -111,11 +111,20 @@ JSON 无法表达 NaN，一致性用例覆盖不到这条，各实现须自行�
 ### 2.3 `search(query, level?, province?, city?, fuzzy=true, regex=false) -> Region[]`
 
 ```
-1. 若 query 全为数字 → 按 adcode 精确查找
+0. query 不是字符串 → 抛出该语言惯用的参数错误
+   level 给定但不属 {province, city, district} → 抛出该语言惯用的参数错误
+   query 为空或仅含空白 → 返回空列表
+1. 若 query 全为 ASCII 数字（[0-9]+）→ 按 adcode 精确查找
 2. 否则 → 按名称精确匹配
 3. 若精确匹配无结果且 fuzzy 为真 → 子串包含匹配
 4. 依次施加 province / city 过滤（若提供）
 ```
+
+- 空查询返回空：空串是任何名字的子串，3271 条结果从来不是空搜索框想要的答案。
+- 「全为数字」指 ASCII 数字。全角 `１１００００` 不是 adcode，按名称匹配（自然无结果）。
+  Python 的 `str.isdigit()` 对全角与上标数字为真，不可直接用。
+- Go 的 `Search` 签名不带 error，非法 `level` 以 panic 报告：不属于 `Levels` 的字符串
+  是编程错误而非坏输入，CLI 与 HTTP 服务在调用前已校验用户输入。
 
 - **`fuzzy` 为纯子串匹配**（区分大小写的字面包含），不是正则。
   正则方言跨语言不兼容（Python `re` / Go RE2 / JS `RegExp` 语义不同），
@@ -138,6 +147,18 @@ JSON 无法表达 NaN，一致性用例覆盖不到这条，各实现须自行�
              否则                        → region.code == C.code
 ```
 
+`city` 过滤对**直辖市与特别行政区**退化为省过滤：市层没有 `北京市` / `110000`，
+但 `reverse()` 与行政区划树都把省级区划当作它们的市返回（§1.4、§2.10），
+前端把树里选出的市节点回传给 `search(city=...)` 必须能用。因此：
+
+```
+按 city 解析 C 失败时：
+  若 C（名称或 adcode）解析为 MERGED 前缀的省 → 按「在省 C 之下」判定
+  否则                                       → 无结果
+```
+
+非 MERGED 前缀的省名传给 `city` 仍是无结果（`city="广东省"` → `[]`）。
+
 ### 2.5 `list_regions(level) -> Region[]`
 
 返回该层级全部区划，**按 adcode 升序**。`level` 非法时抛出该语言惯用的参数错误。
@@ -149,22 +170,26 @@ JSON 无法表达 NaN，一致性用例覆盖不到这条，各实现须自行�
 ### 2.7 `lookup_adcode(adcode) -> ReverseResult?`
 
 ```
-1. adcode 非 6 位数字 → 返回空
+1. adcode 不是 6 位 ASCII 数字的字符串 → 返回空
 2. 由 adcode 判定层级：
      以 "0000" 结尾 → province
      以 "00" 结尾   → city
      否则           → district
-3. province = lookup(adcode[:2] + "0000")
-4. city:
-     MERGED 前缀      → province 副本（level 改为 "city"）
-     层级为 district   → lookup(该 adcode 的 parent)
-     层级为 city       → lookup(adcode)
-5. district = lookup(adcode)，在 district 图层中查找
-     注意：层级判定为 city 时**也要**尝试，因为不设区的地级市
-     （东莞 441900、中山 442000、儋州 460400、嘉峪关 620200）
-     同时存在于城市与区县两层
-6. 三者皆空 → 返回空；否则返回三元组
+3. 层级为 province → province = lookup(adcode)；不存在则返回空
+4. 层级为 district → 在 district 图层查找；不存在则返回空
+     存在则按 §2.1 第 1 步由该区县推导 province 与 city
+5. 层级为 city     → city = lookup(adcode)，在 city 图层查找；不存在则返回空
+     province = lookup(adcode[:2] + "0000")
+     district = lookup(adcode)，在 district 图层查找（可为空）
+     注意：不设区的地级市（东莞 441900、中山 442000、儋州 460400、嘉峪关 620200）
+     与 30 个省直辖县级行政区同时存在于城市与区县两层
 ```
+
+**adcode 所指层级必须存在，否则返回空。** 3.0.0 对不存在的编码返回半截结果——
+`440399` 只有省、`110199` 有省有市——调用方无法用「非空」判断编码是否存在，
+而 `440399` 给省不给市、`110199` 却给市，也说不出道理。直辖市与特别行政区的
+市级形状编码（如 `110100`）在数据中不存在，同样返回空；`is_in_region` 对它抛错，
+两个 API 对同一伪编码态度一致。这是登记的差异 `DIV-107`。
 
 ### 2.8 `is_in_china(lat, lng) -> bool`
 
@@ -174,14 +199,34 @@ JSON 无法表达 NaN，一致性用例覆盖不到这条，各实现须自行�
 
 ```
 1. adcode 非法或不存在 → 抛出该语言惯用的参数错误（不是返回 false）
-2. 层级为 city 且属 MERGED 前缀 → 改判省级多边形
-3. 否则 → 对该 adcode 对应的多边形做点在多边形判定（§3.3）
+2. d = 区县网格查询结果（§4.7，与 reverse 第 1 步相同）
+3. 层级为 district → d 非空 且 d.code == adcode
+   层级为 city     → d 非空 且 d.parent == adcode
+   层级为 province → d 非空 → d.code[:2] == adcode[:2]
+                     d 为空 → 省级网格查询结果非空 且其前 2 位 == adcode[:2]
 ```
+
+**等价于比较 `reverse(lat, lng)` 对应层级的编码**，两者永远不会互相矛盾：
+加格达奇区的点 `reverse().province` 是黑龙江，`is_in_region(..., "230000")` 也是真，
+尽管它落在内蒙古的省级多边形内。
+
+这**不是**「对该 adcode 的多边形做点在多边形判定」。源数据里区县多边形两两重叠的
+有 2801 对；一个同时落在治多县与格尔木市多边形内的点，按多边形判定两者都为真，
+按本节则只有 §3.4 遍历顺序选中的那个为真。v2.1 是前一种语义，v3 是后一种，
+登记为 `DIV-106`。取后者的理由：一个点只能属于一个区县，`reverse` 已经做了这个
+选择，`is_in_region` 不应给出与之相反的第二个答案。
+
+直辖市 / 特别行政区没有市层记录，`110100` 这类编码在第 1 步就被拒绝，
+因此不需要「MERGED 前缀改判省级」的特殊分支。
 
 ### 2.10 `get_administrative_tree() -> TreeNode[]`
 
 省 → 市 → 区县三级。省级按 adcode 升序，各级 `children` 同样按 `value` 升序。
 MERGED 前缀的省份下只有一个市节点，其 `value` 等于省级 adcode。
+
+**每次调用返回独立的副本。** 树可以缓存，但调用方拿到的必须是深拷贝：
+最常见的用法是喂给级联选择器并就地加 `disabled` 之类字段或剪枝，
+若返回共享缓存，一个组件的改动会出现在下一个调用方的结果里。
 台湾省（710000）无下级，`children` 为空数组。
 
 ### 2.11 坐标转换

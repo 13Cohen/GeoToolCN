@@ -452,3 +452,31 @@ class TestCrossApiInvariants:
                         f"{a.code if a else None} batch={b.code if b else None}"
                     )
         _fail(violations, len(coords), "INV-12 batch vs serial")
+
+    def test_inv13_is_in_region_agrees_with_reverse(self, geo: GeoTool, regions: dict[str, list]) -> None:
+        """INV-13: is_in_region(p, X) is true exactly when reverse(p) names X.
+
+        Checked at every district's representative point against all three
+        levels reverse() returns — and against the province polygon's owner
+        where that differs (加格达奇, 嵊泗, the 兵团 cities).
+        """
+        violations = []
+        for r in regions["district"]:
+            lat, lng = r.latitude, r.longitude
+            result = geo.reverse(lat, lng)
+            for level in LEVELS:
+                region = getattr(result, level)
+                if region is None:
+                    continue
+                if not geo.is_in_region(lat, lng, region.code):
+                    violations.append(f"{r.code}: reverse says {level}={region.code} "
+                                      f"but is_in_region is False")
+            if result.province is not None:
+                province_index = geo._data.locate_province(lat, lng)
+                polygon_owner = (geo._data.adcodes[province_index]
+                                 if province_index is not None else None)
+                if polygon_owner and polygon_owner != result.province.code:
+                    if geo.is_in_region(lat, lng, polygon_owner):
+                        violations.append(f"{r.code}: is_in_region true for polygon owner "
+                                          f"{polygon_owner} but reverse says {result.province.code}")
+        _fail(violations, len(regions["district"]), "INV-13 is_in_region vs reverse")
