@@ -330,3 +330,69 @@ func TestNoGeometryPanicsWithErrNoGeometry(t *testing.T) {
 	geo.Reverse(39.9, 116.4)
 	t.Fatal("Reverse returned on a dataset with no geometry")
 }
+
+func TestSearchAcceptsMunicipalityAsCity(t *testing.T) {
+	geo := newTool(t)
+	for _, city := range []string{"北京市", "110000"} {
+		got := geo.Search("朝阳区", SearchOptions{City: city})
+		if len(got) != 1 || got[0].Code != "110105" {
+			t.Errorf("City=%q: got %v", city, got)
+		}
+	}
+	if got := geo.Search("朝阳区", SearchOptions{City: "广东省"}); len(got) != 0 {
+		t.Errorf("a province that is not a municipality is not a city: %v", got)
+	}
+}
+
+func TestSearchBlankAndBadLevel(t *testing.T) {
+	geo := newTool(t)
+	for _, q := range []string{"", "  ", "１１００００"} {
+		if got := geo.Search(q, SearchOptions{}); len(got) != 0 {
+			t.Errorf("Search(%q) = %d results, want 0", q, len(got))
+		}
+	}
+	defer func() {
+		if recover() == nil {
+			t.Fatal("an invalid Level must panic: the signature has no error to return")
+		}
+	}()
+	geo.Search("x", SearchOptions{Level: "county"})
+}
+
+func TestLookupAdcodeUnknownAtLevelIsNil(t *testing.T) {
+	geo := newTool(t)
+	for _, code := range []string{"440399", "110100", "419000"} {
+		if r := geo.LookupAdcode(code); r != nil {
+			t.Errorf("LookupAdcode(%q) = %+v, want nil", code, r)
+		}
+	}
+}
+
+func TestIsInRegionAgreesWithReverse(t *testing.T) {
+	geo := newTool(t)
+	for _, c := range []struct {
+		lat, lng float64
+		code     string
+		want     bool
+	}{
+		{50.37295, 124.16537, "230000", true},
+		{50.37295, 124.16537, "150000", false},
+		{35.77829, 93.31087, "632724", true},
+		{35.77829, 93.31087, "632801", false},
+	} {
+		got, err := geo.IsInRegion(c.lat, c.lng, c.code)
+		if err != nil || got != c.want {
+			t.Errorf("IsInRegion(%v, %v, %s) = %v, %v; want %v", c.lat, c.lng, c.code, got, err, c.want)
+		}
+	}
+}
+
+func TestTreeIsAFreshCopyPerCall(t *testing.T) {
+	a, _ := GetAdministrativeTree()
+	a[0].Label = "mutated"
+	a[0].Children = nil
+	b, _ := GetAdministrativeTree()
+	if b[0].Label == "mutated" || len(b[0].Children) == 0 {
+		t.Fatalf("a caller's edits leaked into the next call: %+v", b[0])
+	}
+}

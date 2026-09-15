@@ -60,10 +60,26 @@ var (
 	treeErr  error
 )
 
-// GetAdministrativeTree returns the three-level tree, built once and reused.
+// GetAdministrativeTree returns the three-level tree. Built once; every call
+// returns a fresh deep copy, so a caller that prunes branches or relabels
+// nodes for one widget cannot change what the next caller sees.
 func GetAdministrativeTree() ([]*TreeNode, error) {
 	treeOnce.Do(func() { treeVal, treeErr = buildTree() })
-	return treeVal, treeErr
+	if treeErr != nil {
+		return nil, treeErr
+	}
+	return cloneNodes(treeVal), nil
+}
+
+func cloneNodes(nodes []*TreeNode) []*TreeNode {
+	if nodes == nil {
+		return nil
+	}
+	out := make([]*TreeNode, len(nodes))
+	for i, n := range nodes {
+		out[i] = &TreeNode{Value: n.Value, Label: n.Label, Children: cloneNodes(n.Children)}
+	}
+	return out
 }
 
 func buildTree() ([]*TreeNode, error) {

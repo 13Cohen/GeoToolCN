@@ -1,7 +1,9 @@
 # 已知差异登记表
 #
-# 黄金测试集由参考实现（geopandas 版）生成。若直接照单全收，其缺陷会被固化成
-# "正确答案"，新实现修好了反而测试失败。本文件登记允许出现的差异。
+# 黄金测试集由当前的 Python 实现生成（conformance/generate.py），几何采样借用
+# geopandas 参考实现。因此套件锁定的是 Python 的行为，包括它的缺陷；独立性靠
+# conformance/differential.py 对拍 v2.1 参考实现来保证。本文件登记两者之间
+# 允许出现的差异，以及各大版本之间已知的行为变化。
 #
 #   参考实现输出 ──┐
 #                 ├──> 差异比对 ──> 能匹配本表？──> 是：采用新实现的值
@@ -23,7 +25,7 @@
 #   samples     实测样本，同时作为 conformance 的定向用例
 
 version: 1
-updated: 2026-09-09
+updated: 2026-09-15
 
 divergences:
   # ------------------------------------------------------------------
@@ -259,3 +261,68 @@ divergences:
     samples:
       - {lat: 30.66457, lng: 122.56396, note: 嵊泗县}
       - {lat: 28.04746, lng: 121.13337, note: 玉环市}
+
+  # ------------------------------------------------------------------
+  # 3.0.0 -> 3.1.0：审查后收口的三处语义。
+  # ------------------------------------------------------------------
+
+  - id: DIV-106
+    title: is_in_region 与 reverse 永远一致，不再对多边形独立判定
+    kind: behavior-change
+    applies_to: "2.1.0 / 3.0.0 -> 3.1.0"
+    status: expected
+    reason: >
+      SPEC §2.9 原文是「对该 adcode 的多边形做点在多边形判定」，v2.1 如此实现；
+      v3.0.0 的实现却是「区县网格首命中 == adcode」，只有省级走省多边形。源数据
+      区县多边形两两重叠 2801 对，两种语义在重叠带上相反；省级的独立判定还让
+      加格达奇区 reverse().province=230000 而 is_in_region(...,"230000")=False。
+      3.1.0 把 SPEC 改为「等价于比较 reverse() 对应层级」，省级也先查区县网格。
+      一个点只能属于一个区县，reverse 已经做了选择，is_in_region 不应给出第二个答案。
+      containment.jsonl 新增 300 对重叠带样本，照 SPEC 旧文实现的移植会在此失败。
+    affects: [is_in_region]
+    match:
+      condition: "old.is_in_region(p, X) != (reverse(p).<level of X>.code == X)"
+    samples:
+      - {lat: 50.37295, lng: 124.16537, adcode: "230000", old: false, new: true, note: 加格达奇区}
+      - {lat: 50.37295, lng: 124.16537, adcode: "150000", old: true, new: false}
+      - {lat: 35.77829, lng: 93.31087, adcode: "632801", old: true, new: false, note: 治多县与格尔木市重叠带}
+      - {lat: 30.66457, lng: 122.56396, adcode: "330000", old: false, new: true, note: 嵊泗县}
+
+  - id: DIV-107
+    title: lookup_adcode 对不存在的编码返回空而非半截结果
+    kind: behavior-change
+    applies_to: "3.0.0 -> 3.1.0"
+    status: expected
+    reason: >
+      3.0.0 对 440399 返回只有省的结果、对 110199 返回省和市，调用方无法用「非空」
+      判断编码是否存在，而两者给不给市也说不出道理。3.1.0 要求 adcode 所指层级
+      必须存在（SPEC §2.7）。直辖市的市级形状编码（110100）在数据里不存在，同样
+      返回空——is_in_region 对它本就抛错，两个 API 现在态度一致。
+    affects: [lookup_adcode]
+    match:
+      condition: "old != null and lookup(old, level_of(adcode)) == null"
+    samples:
+      - {adcode: "440399", old: ["440000", null, null], new: null}
+      - {adcode: "110199", old: ["110000", "110000", null], new: null}
+      - {adcode: "110100", old: ["110000", "110000", null], new: null}
+      - {adcode: "419000", old: ["410000", null, null], new: null}
+
+  - id: DIV-108
+    title: search 接受直辖市作为 city，空查询返回空，非法参数报错
+    kind: behavior-change
+    applies_to: "3.0.0 -> 3.1.0"
+    status: expected
+    reason: >
+      市层没有直辖市与特别行政区的记录，search(city="北京市") 恒为空，而 reverse()
+      与行政树都把省级区划当作它们的市返回——前端把树里选出的市回传即得空。
+      空串是任何名字的子串，search("") 返回全部 3271 条。str.isdigit() 对全角
+      数字为真，"１１００００" 静默走 adcode 路径。level 非法时 Python 抛 KeyError、
+      Node 抛 "undefined is not iterable"、Go 静默返回空，三种行为。
+    affects: [search]
+    match: null
+    samples:
+      - {query: "朝阳区", city: "北京市", old: [], new: ["110105"]}
+      - {query: "朝阳区", city: "110000", old: [], new: ["110105"]}
+      - {query: "", old: "3271 results", new: []}
+      - {query: "１１００００", old: [], new: [], note: 结果相同，路径不同——按名称而非 adcode}
+      - {query: "x", level: "county", old: "KeyError / TypeError / []", new: "ValueError / TypeError / panic"}

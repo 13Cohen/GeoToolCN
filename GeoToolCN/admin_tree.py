@@ -9,6 +9,8 @@ https://datav.aliyun.com/tools/atlas
 """
 from __future__ import annotations
 
+import copy
+
 import json
 import os
 from typing import Any
@@ -95,7 +97,9 @@ def get_administrative_tree() -> list[dict[str, Any]]:
         {"value": "<6-digit adcode>", "label": "<name>", "children": [...]}
 
     The tree is **province → city → district**, sorted by ``value`` at
-    every level.  The result is cached after the first call.
+    every level.  Built once; every call returns a fresh deep copy, so a
+    caller that adds ``disabled`` flags or prunes branches for one widget
+    cannot change what the next caller sees.
 
     Municipalities (北京, 天津, 上海, 重庆) and SARs (香港, 澳门) each
     have a single city-level node whose ``value`` equals the province code.
@@ -109,4 +113,4 @@ def get_administrative_tree() -> list[dict[str, Any]]:
     global _cached_tree
     if _cached_tree is None:
         _cached_tree = _build_tree()
-    return _cached_tree
+    return copy.deepcopy(_cached_tree)

@@ -184,7 +184,23 @@ func (g *GeoTool) ReverseBatch(coords [][2]float64) []ReverseResult {
 }
 
 // Search finds regions by name or adcode.
+//
+// An empty or blank query returns no results: an empty substring is contained
+// in every name, and 3,271 results is never what a blank search box meant.
+//
+// Panics on an opts.Level that is not one of Levels. The signature carries no
+// error return, and a level string the program did not get from Levels is a
+// programming error rather than bad input — the CLI and HTTP server validate
+// user input before calling this.
 func (g *GeoTool) Search(query string, opts SearchOptions) []*Region {
+	if opts.Level != "" {
+		if _, ok := g.data.levelRanges[opts.Level]; !ok {
+			panic(fmt.Sprintf("geotoolcn: invalid level %q, must be one of %v", opts.Level, Levels))
+		}
+	}
+	if strings.TrimSpace(query) == "" {
+		return []*Region{}
+	}
 	d := g.data
 	levels := Levels[:]
 	if opts.Level != "" {
@@ -193,10 +209,7 @@ func (g *GeoTool) Search(query string, opts SearchOptions) []*Region {
 
 	var matches []int
 	for _, levelName := range levels {
-		r, ok := d.levelRanges[levelName]
-		if !ok {
-			continue
-		}
+		r := d.levelRanges[levelName]
 		if digitsPattern.MatchString(query) {
 			for i := r[0]; i < r[1]; i++ {
 				if d.adcodes[i] == query {
@@ -259,30 +272,21 @@ func (g *GeoTool) Search(query string, opts SearchOptions) []*Region {
 // can lie outside its own parent's polygon — islands especially — so a
 // geometric test silently drops valid matches.
 func (g *GeoTool) filterByParent(regions []*Region, parentLevel, parentQuery string) []*Region {
-	d := g.data
-	var parentCode string
+	parentCode := g.resolveParent(parentQuery, parentLevel)
+	if parentCode == "" && parentLevel == "city" {
+		// A municipality or SAR has no city layer of its own: the city a
+		// caller means by "北京市" or "110000" is the province, which is what
+		// Reverse and the administrative tree hand back as the city
+		// (SPEC §2.4).
+		if asProvince := g.resolveParent(parentQuery, "province"); asProvince != "" && mergedPrefixes[asProvince[:2]] {
+			parentCode, parentLevel = asProvince, "province"
+		}
+	}
 	// "No parent by that name" is an empty result, not a nil one: nil
 	// marshals to JSON null, and the CLI and HTTP server promise [].
-	if digitsPattern.MatchString(parentQuery) {
-		if d.indexOf(parentQuery, parentLevel) < 0 {
-			return []*Region{}
-		}
-		parentCode = parentQuery
-	} else {
-		r := d.levelRanges[parentLevel]
-		found := -1
-		for _, i := range d.byName[parentQuery] {
-			if i >= r[0] && i < r[1] {
-				found = i
-				break
-			}
-		}
-		if found < 0 {
-			return []*Region{}
-		}
-		parentCode = d.adcodes[found]
+	if parentCode == "" {
+		return []*Region{}
 	}
-
 	out := regions[:0:0]
 	for _, region := range regions {
 		if g.isUnder(region, parentLevel, parentCode) {
@@ -290,6 +294,25 @@ func (g *GeoTool) filterByParent(regions []*Region, parentLevel, parentQuery str
 		}
 	}
 	return out
+}
+
+// resolveParent is the adcode of the region parentQuery names at parentLevel,
+// or "" when there is none.
+func (g *GeoTool) resolveParent(parentQuery, parentLevel string) string {
+	d := g.data
+	if digitsPattern.MatchString(parentQuery) {
+		if d.indexOf(parentQuery, parentLevel) < 0 {
+			return ""
+		}
+		return parentQuery
+	}
+	r := d.levelRanges[parentLevel]
+	for _, i := range d.byName[parentQuery] {
+		if i >= r[0] && i < r[1] {
+			return d.adcodes[i]
+		}
+	}
+	return ""
 }
 
 func (g *GeoTool) isUnder(region *Region, parentLevel, parentCode string) bool {
@@ -341,7 +364,9 @@ func adcodeLevel(adcode string) string {
 	}
 }
 
-// LookupAdcode returns the full chain for a 6-digit adcode, or nil.
+// LookupAdcode returns the full chain for a 6-digit adcode, or nil when the
+// adcode is malformed or names no region at the level its shape implies
+// (SPEC §2.7). A non-nil result therefore means "this adcode exists".
 func (g *GeoTool) LookupAdcode(adcode string) *ReverseResult {
 	level := adcodeLevel(adcode)
 	if level == "" {
@@ -357,27 +382,25 @@ func (g *GeoTool) LookupAdcode(adcode string) *ReverseResult {
 		return &ReverseResult{Province: province}
 	}
 
-	var city *Region
-	switch {
-	case mergedPrefixes[prefix2]:
-		city = provinceAsCity(province)
-	case level == "district":
-		if i := g.data.indexOf(adcode, "district"); i >= 0 {
-			if parent := g.data.parents[i]; parent != "" {
-				city = g.regionByCode(parent, "city")
-			}
+	if level == "district" {
+		i := g.data.indexOf(adcode, "district")
+		if i < 0 {
+			return nil
 		}
-	default:
-		city = g.regionByCode(adcode, "city")
+		chain := g.chainFromDistrict(i)
+		return &chain
 	}
 
-	// Prefecture-level cities with no subdivisions (东莞, 中山, 儋州, 嘉峪关)
-	// appear at both levels under one code, so try either way.
-	district := g.regionByCode(adcode, "district")
-
-	if province == nil && city == nil && district == nil {
+	// City-shaped code. Municipalities and SARs have no city layer, so a code
+	// like 110100 names nothing and is nil here.
+	city := g.regionByCode(adcode, "city")
+	if city == nil {
 		return nil
 	}
+	// Prefecture-level cities with no subdivisions (东莞, 中山, 儋州, 嘉峪关)
+	// and the province-governed county-level divisions appear at both levels
+	// under one code.
+	district := g.regionByCode(adcode, "district")
 	return &ReverseResult{Province: province, City: city, District: district}
 }
 
@@ -386,8 +409,10 @@ func (g *GeoTool) IsInChina(lat, lng float64) bool {
 	return g.data.locate(lat, lng) >= 0 || g.data.locateProvince(lat, lng) >= 0
 }
 
-// IsInRegion reports whether a coordinate falls within a specific region.
-// It errors on a malformed or unknown adcode rather than reporting false.
+// IsInRegion reports whether a coordinate falls within a specific region —
+// defined as "the matching level of Reverse is this adcode" (SPEC §2.9), so
+// the two can never disagree. It errors on a malformed or unknown adcode
+// rather than reporting false.
 func (g *GeoTool) IsInRegion(lat, lng float64, adcode string) (bool, error) {
 	level := adcodeLevel(adcode)
 	if level == "" {
@@ -397,23 +422,25 @@ func (g *GeoTool) IsInRegion(lat, lng float64, adcode string) (bool, error) {
 		return false, fmt.Errorf("geotoolcn: region not found for adcode %q", adcode)
 	}
 
-	if level == "province" {
-		// Answer from the province grid: Taiwan has no districts, so routing
-		// this through the district lookup reports false for the whole island.
+	i := g.data.locate(lat, lng)
+	if i < 0 {
+		if level != "province" {
+			return false, nil
+		}
+		// No district covers the point — Taiwan is published at province
+		// level only, and coastal gaps leave slivers — so fall back to the
+		// province grid, exactly as Reverse does.
 		pi := g.data.locateProvince(lat, lng)
 		return pi >= 0 && g.data.adcodes[pi][:2] == adcode[:2], nil
 	}
 
-	i := g.data.locate(lat, lng)
-	if i < 0 {
-		return false, nil
-	}
 	districtCode := g.data.adcodes[i]
-	if level == "district" {
-		return districtCode == adcode, nil
-	}
-	if mergedPrefixes[adcode[:2]] {
+	switch level {
+	case "province":
 		return districtCode[:2] == adcode[:2], nil
+	case "district":
+		return districtCode == adcode, nil
+	default:
+		return g.data.parents[i] == adcode, nil
 	}
-	return g.data.parents[i] == adcode, nil
 }

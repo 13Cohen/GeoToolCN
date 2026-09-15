@@ -1,4 +1,4 @@
-<!-- translation-of: SPEC.md sha256:c50aeb9ab7d56647b146a9f0e304e789b7098d5a77ca49c21da9fd614e8822f4 -->
+<!-- translation-of: SPEC.md sha256:c4be2a2afd40bc39aa8d0bbe54ca3a949e99dde8b22f0cf82e18f84801e64042 -->
 
 # GeoToolCN Specification v1
 
@@ -134,11 +134,23 @@ matches the input.
 ### 2.3 `search(query, level?, province?, city?, fuzzy=true, regex=false) -> Region[]`
 
 ```
-1. If query is all digits -> exact adcode lookup
-2. Otherwise              -> exact name match
+0. query is not a string -> raise the language's idiomatic argument error
+   level given but not one of {province, city, district} -> raise likewise
+   query empty or whitespace-only -> return an empty list
+1. If query is all ASCII digits ([0-9]+) -> exact adcode lookup
+2. Otherwise                             -> exact name match
 3. If no exact match and fuzzy is true -> substring match
 4. Apply the province / city filters in turn, if given
 ```
+
+- An empty query returns nothing: the empty string is a substring of every
+  name, and 3,271 results is never what a blank search box meant.
+- "All digits" means ASCII digits. Full-width `１１００００` is not an adcode
+  and is matched as a name (finding nothing). Python's `str.isdigit()` is true
+  for full-width and superscript digits and must not be used as is.
+- Go's `Search` has no error return; an invalid `level` panics. A string that
+  is not one of `Levels` is a programming error rather than bad input, and the
+  CLI and HTTP server validate user input before calling it.
 
 - **`fuzzy` is plain substring matching** (case-sensitive literal containment),
   not a regex. Regex dialects are incompatible across languages (Python `re`,
@@ -167,6 +179,22 @@ under city C:     region.level == "district" -> region.parent == C.code
                   otherwise                  -> region.code == C.code
 ```
 
+For **municipalities and SARs** the `city` filter degrades to a province
+filter: the city layer holds no `北京市` / `110000`, but `reverse()` and the
+administrative tree both report the province as their city (§1.4, §2.10), and
+a front end must be able to hand the city node it picked from the tree back to
+`search(city=...)`. So:
+
+```
+when C cannot be resolved as a city:
+  if C (name or adcode) resolves to a province with a MERGED prefix
+                                          -> decide as "under province C"
+  otherwise                               -> no results
+```
+
+A province name that is not a municipality still yields nothing as `city`
+(`city="广东省"` → `[]`).
+
 ### 2.5 `list_regions(level) -> Region[]`
 
 Every region at that level, **sorted by adcode ascending**. An invalid `level`
@@ -180,22 +208,30 @@ first hit.
 ### 2.7 `lookup_adcode(adcode) -> ReverseResult?`
 
 ```
-1. Not 6 digits -> return null
+1. Not a string of 6 ASCII digits -> return null
 2. Determine the level from the adcode:
      ends with "0000" -> province
      ends with "00"   -> city
      otherwise        -> district
-3. province = lookup(adcode[:2] + "0000")
-4. city:
-     MERGED prefix        -> copy of province (level = "city")
-     level is district    -> lookup(that adcode's parent)
-     level is city        -> lookup(adcode)
-5. district = lookup(adcode) in the district layer
-     Note: try this even when the level was judged to be city, because the
-     prefecture-level cities with no subdivisions (东莞 441900, 中山 442000,
-     儋州 460400, 嘉峪关 620200) exist in both the city and district layers
-6. All three null -> return null; otherwise return the triple
+3. Level is province -> province = lookup(adcode); null if absent
+4. Level is district -> look up in the district layer; null if absent
+     If present, derive province and city from the district as in §2.1 step 1
+5. Level is city     -> city = lookup(adcode) in the city layer; null if absent
+     province = lookup(adcode[:2] + "0000")
+     district = lookup(adcode) in the district layer (may be null)
+     Note: the prefecture-level cities with no subdivisions (东莞 441900,
+     中山 442000, 儋州 460400, 嘉峪关 620200) and the 30 province-governed
+     county-level divisions exist in both the city and district layers
 ```
+
+**The level the adcode names must exist, otherwise return null.** 3.0.0
+returned a partial chain for unknown codes — the province alone for `440399`,
+province and city for `110199` — so a caller could not use "non-null" as an
+existence test, and there was no rationale for why `440399` got a province but
+no city while `110199` got a city. The city-shaped codes of municipalities and
+SARs (such as `110100`) do not exist in the data and return null as well;
+`is_in_region` raises for them, so the two APIs now treat the same pseudo-code
+the same way. Registered as `DIV-107`.
 
 ### 2.8 `is_in_china(lat, lng) -> bool`
 
@@ -206,9 +242,30 @@ Equivalent to `reverse(lat, lng).province != null`.
 ```
 1. Malformed or unknown adcode -> raise the language's idiomatic argument
    error (do not return false)
-2. Level is city and the prefix is MERGED -> test the province polygon instead
-3. Otherwise -> point-in-polygon against that adcode's polygon (§3.3)
+2. d = the district-grid lookup (§4.7, the same as reverse step 1)
+3. Level is district -> d is non-null and d.code == adcode
+   Level is city     -> d is non-null and d.parent == adcode
+   Level is province -> d non-null -> d.code[:2] == adcode[:2]
+                        d null     -> the province-grid lookup is non-null and
+                                      its first 2 digits == adcode[:2]
 ```
+
+**Equivalent to comparing the matching level of `reverse(lat, lng)`**, so the
+two can never disagree: for a point in 加格达奇区, `reverse().province` is
+黑龙江 and `is_in_region(..., "230000")` is true, although the point lies
+inside 内蒙古's province polygon.
+
+This is **not** "point-in-polygon against that adcode's polygon". District
+polygons overlap in 2,801 pairs in the source data; a point inside both 治多县
+and 格尔木市 is true for both under polygon containment, and true for exactly
+the one §3.4's traversal order picks under this section. v2.1 had the former
+semantics, v3 the latter; registered as `DIV-106`. The reason for the latter:
+a point belongs to one district, `reverse` has already made that choice, and
+`is_in_region` must not give a second, contradictory answer.
+
+Municipalities and SARs have no city-layer records, so a code like `110100`
+is rejected at step 1 and no "MERGED prefix → test the province" branch is
+needed.
 
 ### 2.10 `get_administrative_tree() -> TreeNode[]`
 
@@ -216,6 +273,11 @@ Province → city → district. Provinces sorted by adcode; `children` at every
 level sorted by `value`. A province with a MERGED prefix has exactly one city
 node whose `value` equals the province adcode. 台湾省 (710000) has no
 sub-divisions, so its `children` is an empty array.
+
+**Every call returns an independent copy.** The tree may be cached, but what
+a caller receives must be a deep copy: the usual consumer is a cascader that
+adds `disabled` flags or prunes branches in place, and with a shared cache one
+component's edits would show up in the next caller's result.
 
 ### 2.11 Coordinate conversions
 

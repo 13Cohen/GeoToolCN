@@ -74,5 +74,7 @@ function build() {
 /** Province → city → district tree. Cached after the first call. */
 export function getAdministrativeTree() {
   if (cached === null) cached = build();
-  return cached;
+  // A fresh copy every call: a caller that adds `disabled` flags or prunes
+  // branches for one widget must not change what the next caller sees.
+  return structuredClone(cached);
 }

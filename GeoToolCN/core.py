@@ -6,7 +6,9 @@ divergences registered in ``conformance/known-divergences.yaml``.  See SPEC.md
 """
 from __future__ import annotations
 
+import copy
 import os
+import re
 from dataclasses import dataclass
 from typing import Sequence
 
@@ -18,10 +20,23 @@ __all__ = ["GeoTool", "Region", "ReverseResult", "GTCFormatError", "GeometryUnav
 _DEFAULT_DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 _DEFAULT_GTC = os.path.join(_DEFAULT_DATA_DIR, "china.full.gtc")
 
+# "All digits" means ASCII digits (SPEC §2.3). str.isdigit() is true for
+# full-width １１００００ and superscripts, which then miss every adcode
+# silently instead of being searched as a name.
+_ASCII_DIGITS = re.compile(r"[0-9]+")
+_ADCODE = re.compile(r"[0-9]{6}")
 
-@dataclass
+
+def _is_digits(text: str) -> bool:
+    return _ASCII_DIGITS.fullmatch(text) is not None
+
+
+@dataclass(frozen=True)
 class Region:
-    """A single administrative region."""
+    """A single administrative region.
+
+    Immutable, so instances can be dict keys and set members.
+    """
 
     name: str
     code: str
@@ -30,7 +45,7 @@ class Region:
     longitude: float | None = None
 
 
-@dataclass
+@dataclass(frozen=True)
 class ReverseResult:
     """Result of a reverse-geocode lookup for one coordinate."""
 
@@ -247,14 +262,30 @@ class GeoTool:
         Returns
         -------
         list[Region]
+            Empty when *query* is empty or whitespace: an empty substring is
+            contained in every name, and 3,271 results is never the answer a
+            blank search box wanted.
+
+        Raises
+        ------
+        TypeError
+            *query* is not a string.
+        ValueError
+            *level* is not ``"province"``, ``"city"`` or ``"district"``.
         """
+        if not isinstance(query, str):
+            raise TypeError(f"query must be a str, not {type(query).__name__}")
+        if level is not None and level not in LEVELS:
+            raise ValueError(f"Invalid level {level!r}. Must be one of {LEVELS}")
+        if not query.strip():
+            return []
         data = self._data
         levels = [level] if level else list(LEVELS)
         matches: list[int] = []
 
         for level_name in levels:
             start, end = data.level_ranges[level_name]
-            if query.isdigit():
+            if _is_digits(query):
                 matches += [i for i in range(start, end) if data.adcodes[i] == query]
                 continue
             exact = [i for i in data.by_name.get(query, ()) if start <= i < end]
@@ -291,19 +322,30 @@ class GeoTool:
         valid matches.
         """
         data = self._data
-        if parent_query.isdigit():
-            index = data.index_of(parent_query, parent_level)
-            if index is None:
-                return []
-            parent_code = parent_query
-        else:
-            start, end = data.level_ranges[parent_level]
-            candidates = [i for i in data.by_name.get(parent_query, ()) if start <= i < end]
-            if not candidates:
-                return []
-            parent_code = data.adcodes[candidates[0]]
-
+        parent_code = self._resolve_parent(parent_query, parent_level)
+        if parent_code is None and parent_level == "city":
+            # A municipality or SAR has no city layer of its own: the city a
+            # caller means by "北京市" or "110000" is the province, which is
+            # what reverse() and the administrative tree hand back as the
+            # city. Filter by the province instead (SPEC §2.4).
+            parent_code = self._resolve_parent(parent_query, "province")
+            if parent_code is not None and parent_code[:2] in MERGED_PREFIXES:
+                parent_level = "province"
+            else:
+                parent_code = None
+        if parent_code is None:
+            return []
         return [r for r in regions if self._is_under(r, parent_level, parent_code)]
+
+    def _resolve_parent(self, parent_query: str, parent_level: str) -> str | None:
+        """The adcode of the region *parent_query* names at *parent_level*."""
+        data = self._data
+        if _is_digits(parent_query):
+            index = data.index_of(parent_query, parent_level)
+            return parent_query if index is not None else None
+        start, end = data.level_ranges[parent_level]
+        candidates = [i for i in data.by_name.get(parent_query, ()) if start <= i < end]
+        return data.adcodes[candidates[0]] if candidates else None
 
     def _is_under(self, region: Region, parent_level: str, parent_code: str) -> bool:
         if parent_level == "province":
@@ -346,7 +388,12 @@ class GeoTool:
         Returns
         -------
         Region or None
+            *None* for an unknown code, and for anything that is not a string
+            of six ASCII digits — an ``int`` is never an adcode, because the
+            leading zero of ``"010000"``-style codes would be lost.
         """
+        if not isinstance(code, str):
+            return None
         for level in LEVELS:
             region = self._region_by_code(code, level)
             if region is not None:
@@ -360,7 +407,7 @@ class GeoTool:
     @staticmethod
     def _adcode_level(adcode: str) -> str | None:
         """Detect admin level from a 6-digit adcode, or *None* if invalid."""
-        if len(adcode) != 6 or not adcode.isdigit():
+        if not isinstance(adcode, str) or _ADCODE.fullmatch(adcode) is None:
             return None
         if adcode.endswith("0000"):
             return "province"
@@ -380,8 +427,11 @@ class GeoTool:
         Returns
         -------
         ReverseResult or None
-            The full province/city/district chain, or *None* when the
-            adcode is invalid or nothing can be found.
+            The full province/city/district chain, or *None* when the adcode
+            is malformed or names no region at the level its shape implies
+            (SPEC §2.7).  ``result is not None`` therefore means "this adcode
+            exists"; earlier versions returned a partial chain — the province
+            alone for ``"440399"`` — which made that test impossible.
         """
         level = self._adcode_level(adcode)
         if level is None:
@@ -394,21 +444,21 @@ class GeoTool:
         if level == "province":
             return ReverseResult(province=province) if province else None
 
-        if prefix2 in MERGED_PREFIXES:
-            city = self._province_as_city(province) if province else None
-        elif level == "district":
+        if level == "district":
             index = self._data.index_of(adcode, "district")
-            parent = self._data.parents[index] if index is not None else None
-            city = self._region_by_code(parent, "city") if parent else None
-        else:
-            city = self._region_by_code(adcode, "city")
+            if index is None:
+                return None
+            return self._chain_from_district(index)
 
-        # Prefecture-level cities with no subdivisions (东莞, 中山, 儋州,
-        # 嘉峪关) appear at both levels under one code, so try either way.
-        district = self._region_by_code(adcode, "district")
-
-        if province is None and city is None and district is None:
+        # City-shaped code. Municipalities and SARs have no city layer, so a
+        # code like 110100 names nothing and falls through to None here.
+        city = self._region_by_code(adcode, "city")
+        if city is None:
             return None
+        # Prefecture-level cities with no subdivisions (东莞, 中山, 儋州,
+        # 嘉峪关) and the 30 province-governed county-level divisions appear
+        # at both levels under one code.
+        district = self._region_by_code(adcode, "district")
         return ReverseResult(province=province, city=city, district=district)
 
     # ------------------------------------------------------------------
@@ -437,6 +487,11 @@ class GeoTool:
     def is_in_region(self, lat: float, lng: float, adcode: str) -> bool:
         """Check whether a coordinate falls within a specific admin region.
 
+        Equivalent to comparing the matching level of :meth:`reverse` with
+        *adcode* (SPEC §2.9), so the two can never disagree: 加格达奇区 is in
+        黑龙江 because that is the province ``reverse`` derives for it, even
+        though the point sits inside 内蒙古's province polygon.
+
         Parameters
         ----------
         lat : float
@@ -461,24 +516,22 @@ class GeoTool:
         if self._data.index_of(adcode) is None:
             raise ValueError(f"Region not found for adcode {adcode!r}")
 
-        if level == "province":
-            # Answer from the province grid directly: Taiwan has no districts,
-            # so routing this through the district lookup would report False
-            # for every point on the island.
+        index = self._data.locate(lat, lng)
+        if index is None:
+            if level != "province":
+                return False
+            # No district covers the point — Taiwan is published at province
+            # level only, and coastal gaps leave slivers — so the province
+            # grid is the fallback, exactly as in reverse().
             province_index = self._data.locate_province(lat, lng)
             return (
                 province_index is not None
                 and self._data.adcodes[province_index][:2] == adcode[:2]
             )
 
-        index = self._data.locate(lat, lng)
-        if index is None:
-            return False
         district_code = self._data.adcodes[index]
-
+        if level == "province":
+            return district_code[:2] == adcode[:2]
         if level == "district":
             return district_code == adcode
-        # City: municipalities and SARs resolve through the province instead.
-        if adcode[:2] in MERGED_PREFIXES:
-            return district_code[:2] == adcode[:2]
         return self._data.parents[index] == adcode

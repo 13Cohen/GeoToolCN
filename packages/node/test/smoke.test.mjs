@@ -155,3 +155,42 @@ test("a dataset with no geometry still answers name lookups", async () => {
   assert.equal(data.names[data.byCode.get("110000")], "北京市");
   assert.throws(() => data.locate(39.9, 116.4), GeometryUnavailable);
 });
+
+test("a municipality is accepted as the city filter", () => {
+  // reverse() and the tree report 北京市 / 110000 as the city (SPEC §2.4).
+  assert.deepEqual(search("朝阳区", { city: "北京市" }).map((r) => r.code), ["110105"]);
+  assert.deepEqual(search("朝阳区", { city: "110000" }).map((r) => r.code), ["110105"]);
+  assert.deepEqual(search("朝阳区", { city: "广东省" }), []);
+});
+
+test("blank queries and bad levels", () => {
+  assert.deepEqual(search(""), []);
+  assert.deepEqual(search("  "), []);
+  assert.deepEqual(search("１１００００"), []);
+  assert.throws(() => search("x", { level: "county" }), TypeError);
+  assert.throws(() => search(110000), TypeError);
+});
+
+test("lookupAdcode is null for a code that names nothing at its level", () => {
+  assert.equal(lookupAdcode("440399"), null);
+  assert.equal(lookupAdcode("110100"), null);
+  assert.equal(lookupAdcode(110108), null);
+  assert.equal(lookupAdcode("419001").city.code, "419001");
+});
+
+test("isInRegion agrees with reverse, not with the province polygon", () => {
+  assert.equal(isInRegion(50.37295, 124.16537, "230000"), true);
+  assert.equal(isInRegion(50.37295, 124.16537, "150000"), false);
+  // Inside both 治多县 and 格尔木市 polygons: only reverse()'s pick is true.
+  assert.equal(isInRegion(35.77829, 93.31087, "632724"), true);
+  assert.equal(isInRegion(35.77829, 93.31087, "632801"), false);
+});
+
+test("the administrative tree is a fresh copy per call", () => {
+  const a = getAdministrativeTree();
+  a[0].label = "mutated";
+  a[0].children.length = 0;
+  const b = getAdministrativeTree();
+  assert.notEqual(b[0].label, "mutated");
+  assert.ok(b[0].children.length > 0);
+});

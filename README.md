@@ -77,6 +77,7 @@ from GeoToolCN import reverse, search, get_administrative_tree
 
 result = reverse(39.9, 116.4)
 regions = search("朝阳区", province="北京市")   # 消歧：北京和长春都有朝阳区
+regions = search("朝阳区", city="110000")      # 直辖市也可作为 city 传入，与 reverse().city 一致
 tree = get_administrative_tree()             # 级联选择器用的三级树
 ```
 
@@ -152,15 +153,18 @@ geo.search("朝阳区", city="长春市")        # 仅返回长春的
 
 ### `geo.lookup_adcode(adcode) → ReverseResult | None`
 
-按 adcode 返回完整的省 / 市 / 区县链。
+按 adcode 返回完整的省 / 市 / 区县链；adcode 所指层级不存在时返回 `None`（3.1 起，
+`440399` 这类编码以前返回只有省的半截结果），因此 `is not None` 就是「这个编码存在」。
 
 ### `geo.is_in_china(lat, lng) → bool` / `geo.is_in_region(lat, lng, adcode) → bool`
 
-包含判定。
+包含判定。`is_in_region` 等价于把 `reverse()` 对应层级的编码与 `adcode` 比较，两者永远
+一致——它**不是**对该区划的多边形做点在多边形判定：源数据中区县多边形两两重叠的有 2801 对，
+一个点只能属于一个区县，`reverse()` 已经做了这个选择。`adcode` 非法或不存在时抛 `ValueError`。
 
 ### `get_administrative_tree() → list[dict]`
 
-返回省→市→区县三级行政区划树。每个节点格式：`{"value": "adcode", "label": "名称", "children": [...]}`。覆盖 34 个省级单位（含台湾、香港、澳门），2874 个区县。直辖市和特别行政区的市级节点 `value` 使用省级代码。首次调用后缓存。
+返回省→市→区县三级行政区划树。每个节点格式：`{"value": "adcode", "label": "名称", "children": [...]}`。覆盖 34 个省级单位（含台湾、香港、澳门），2874 个区县。直辖市和特别行政区的市级节点 `value` 使用省级代码。构建一次后缓存，每次调用返回独立的深拷贝，可以放心就地修改。
 
 ### 坐标转换
 

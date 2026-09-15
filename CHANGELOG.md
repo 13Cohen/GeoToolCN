@@ -4,7 +4,25 @@
 
 ## [Unreleased]
 
-运行时缺陷修复，不改变任何一致性用例的答案（38,348 条三方全过，黄金集未重生成）。
+### 行为变更（3.1.0，DIV-106 ~ DIV-108，见 [MIGRATION_v3.md](MIGRATION_v3.md)「3.1.0 的行为变更」）
+
+- **`is_in_region()` 与 `reverse()` 永远一致。** SPEC §2.9 原文是「对该 adcode 的多边形做
+  点在多边形判定」，3.0.0 的实现却是「区县网格首命中 == adcode」，只有省级走省多边形——
+  源数据区县多边形两两重叠 2801 对，两种语义在重叠带上相反，省级还让加格达奇区
+  `reverse().province=230000` 而 `is_in_region(...,"230000")=False`。SPEC 改为「等价于比较
+  `reverse()` 对应层级」，三方同步。黄金集新增 300 对重叠带样本，照旧文实现的移植会失败。
+- **`lookup_adcode()` 对不存在的编码返回 `None`**，不再返回半截结果（`440399` 只有省、
+  `110199` 有省有市），`is not None` 可作存在性判断。
+- **`search()`**：`city="北京市"` / `city="110000"` 可用（市层没有直辖市，但 `reverse()` 与
+  行政树都把省当作它们的市返回）；空/空白查询返回 `[]`（以前返回全部 3271 条）；`level` 非法
+  抛参数错误（以前 Python `KeyError`、Node `TypeError: undefined is not iterable`、Go 静默空）；
+  非字符串 query 抛 `TypeError`；「全为数字」限定 ASCII，全角 `１１００００` 按名称匹配。
+- `get_administrative_tree()` 每次返回深拷贝；`Region` / `ReverseResult` 改为 `frozen=True`，
+  可哈希。
+- 一致性套件 38,348 → 39,438 条；`known-divergences.yaml` 首段更正为「黄金集由 Python 实现生成，
+  独立性靠差分对拍保证」。
+
+### 修复（不改变任何一致性用例的答案）
 
 ### 修复
 
