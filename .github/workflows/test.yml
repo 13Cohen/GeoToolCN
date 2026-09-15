@@ -281,9 +281,13 @@ jobs:
           CURRENT_PY=$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml | head -1)
           CURRENT_NODE=$(node -p "require('./packages/node/package.json').version")
           GO_MAJOR=$(head -1 packages/go/go.mod | sed -n 's#.*/\(v[0-9]*\)$#\1#p')
+          # Whatever the tree holds — final or pre-release — must be accepted;
+          # the pre-release flag is checked on fixed inputs below.
           bash scripts/release_gate.sh "py-v$CURRENT_PY" --skip-ancestry | grep -qx "ecosystem=python"
-          bash scripts/release_gate.sh "npm-v$CURRENT_NODE" --skip-ancestry | grep -qx "prerelease=false"
-          bash scripts/release_gate.sh "packages/go/$GO_MAJOR.99.0" --skip-ancestry | grep -qx "ecosystem=go"
+          bash scripts/release_gate.sh "npm-v$CURRENT_NODE" --skip-ancestry | grep -qx "ecosystem=node"
+          bash scripts/release_gate.sh "packages/go/$GO_MAJOR.99.0" --skip-ancestry | grep -qx "prerelease=false"
+          bash scripts/release_gate.sh "packages/go/$GO_MAJOR.99.0-rc.1" --skip-ancestry | grep -qx "prerelease=true"
+          bash scripts/release_gate.sh "cli-v9.9.9" --skip-ancestry | grep -qx "prerelease=false"
           bash scripts/release_gate.sh "cli-v9.9.9rc1" --skip-ancestry | grep -qx "prerelease=true"
 
       - name: And refuses a tag that disagrees with the tree
