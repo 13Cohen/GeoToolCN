@@ -2,6 +2,13 @@
 
 本文件记录 GeoToolCN 的重要变更。版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+- **PyPI 与 npm 改为 Trusted Publishing（OIDC）。** 两个 registry 的项目设置里登记了本仓库的
+  `release.yml` 为发布者；`PYPI_API_TOKEN` / `NPM_TOKEN` secret 已删除，旧 token 已在两个 registry
+  上撤销，看门狗里的 token 探活随之移除。3.1.0 是最后一个用 token 发布的版本。
+- PyPI 上自报 2.1.0 的 `3.0.0rc1` 已 yank。
+
 ## [3.1.0] — 2026-09-15
 
 ### 行为变更（3.1.0，DIV-106 ~ DIV-108，见 [MIGRATION_v3.md](MIGRATION_v3.md)「3.1.0 的行为变更」）
@@ -136,7 +143,7 @@
 - `release.yml` 删除无 job 处理的 `data-*` 触发器与在分支上无效的 `workflow_dispatch`。
 - **每日守护不再静默。** 定时验证失败时开 issue（`post-release-failure` 标签），恢复后关闭；
   每次运行重新启用自身，抵消 GitHub「60 天无提交即禁用定时 workflow」的规则；`npm whoami`
-  探活 `NPM_TOKEN` 并在到期前 14 天报错。README 加徽章。
+  探活 `NPM_TOKEN` 并在到期前 14 天报错（3.1.0 后随 OIDC 迁移移除）。README 加徽章。
 - **CI 覆盖面。** Python 矩阵加 3.13 / 3.14，加 Windows 与 macOS 各一行（`pyproject.toml`
   声称 OS Independent 但从未在 Linux 之外跑过）；Node 测 18 / 20 / 22 / 24；新增 `docker` job
   在每个 PR 里按发布方式构建双平台镜像并运行 amd64（以前 Dockerfile 只在真实 tag 时首次执行）；

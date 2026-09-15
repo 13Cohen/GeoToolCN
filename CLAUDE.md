@@ -152,9 +152,9 @@ pip install -e .
 - `CONTRIBUTING.md` / `CONTRIBUTING_EN.md` — the workflow by intent: fix a bug, change a
   behaviour (SPEC → Python → regenerate suite → other ports → divergence registry),
   update data, add a language, add a test at the right layer
-- `docs/RELEASING.md` — which tag publishes what, and the credentials each needs.
-  Records that NPM_TOKEN expires 2026-12-09: npm caps write tokens at 90 days, so
-  the npm job fails alone while the other three ecosystems keep working
+- `docs/RELEASING.md` — which tag publishes what. PyPI and npm publish through Trusted
+  Publishing (OIDC): each registry has this repository's `release.yml` registered as
+  the publisher, so there are no API tokens anywhere and nothing that expires
 - `DATA_UPDATE_REPORT.md` — Auto-generated report from last data update
 
 ### Hierarchy Resolution — read before touching `reverse()`

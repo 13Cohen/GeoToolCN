@@ -46,6 +46,9 @@ jobs:
     needs: plan
     if: needs.plan.outputs.ecosystem == 'python'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # PyPI trusted publishing (OIDC); no API token anywhere
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -66,14 +69,11 @@ jobs:
           python scripts/verify_published.py --only python --version "$VERSION" \
             --artifact "$(ls dist/*.whl)"
 
-      # Uses the PYPI_API_TOKEN already configured for this repository.
-      # Trusted publishing (OIDC) would be preferable — no long-lived token —
-      # but it needs a one-time publisher configured on PyPI, and omitting the
-      # password here silently selects it, so the first release would have
-      # failed on a repository that has a perfectly good token.
+      # Trusted publishing: PyPI has this repository's release.yml registered
+      # as a publisher (project settings → Publishing), so the action swaps
+      # the job's OIDC token for a short-lived upload token. No password, no
+      # PYPI_API_TOKEN secret, nothing that expires or can leak.
       - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
-        with:
-          password: ${{ secrets.PYPI_API_TOKEN }}
 
   node:
     needs: plan
@@ -84,13 +84,20 @@ jobs:
       id-token: write   # npm provenance attestation
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # No registry-url: that makes setup-node write an .npmrc with
+      # _authToken=${NODE_AUTH_TOKEN}, and npm refuses to start when the
+      # variable it references is unset. Trusted publishing needs no token
+      # at all, and the default registry is npmjs.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
-          registry-url: https://registry.npmjs.org
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
+
+      # Trusted publishing (OIDC) landed in npm 11.5.1; Node 22 ships an
+      # older npm.
+      - run: npm install -g npm@latest && npm --version
 
       - name: Bundle the dataset and test
         run: |
@@ -111,17 +118,17 @@ jobs:
           python scripts/verify_published.py --only node --version "$VERSION" \
             --artifact "$(ls /tmp/npm-dist/*.tgz)"
 
-      # NPM_TOKEN expires 2026-12-09 — npm caps write tokens at 90 days, so this
-      # job will one day start failing with 401 while the other three ecosystems
-      # keep publishing fine. Renewal steps, and how to drop the token entirely
-      # in favour of trusted publishing, are in docs/RELEASING.md.
+      # Trusted publishing: npm has this repository's release.yml registered
+      # as the package's publisher (package settings → Trusted Publisher), so
+      # npm exchanges the job's OIDC token for a publish credential itself and
+      # attaches provenance. No NPM_TOKEN, nothing that expires on a date
+      # somebody has to remember.
       #
       # A pre-release goes out under the `next` dist-tag: `npm install` with no
       # version must keep resolving to the last final release.
       - name: Publish
         working-directory: packages/node
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           PRERELEASE: ${{ needs.plan.outputs.prerelease }}
         run: |
           tag_args=()
@@ -273,13 +280,12 @@ jobs:
     # A called workflow may use no more than the caller grants, and GitHub
     # validates that against every job in it before anything runs — including
     # post-release.yml's schedule-only alert and watchdog jobs, which ask for
-    # issues: write and actions: write and read NPM_TOKEN. Granting less here
-    # is a startup_failure on every tag, with no log to say so.
+    # issues: write and actions: write. Granting less here is a
+    # startup_failure on every tag, with no log to say so.
     permissions:
       contents: read
       issues: write
       actions: write
-    secrets: inherit
     uses: ./.github/workflows/post-release.yml
     with:
       ecosystems: ${{ needs.plan.outputs.ecosystem }}
