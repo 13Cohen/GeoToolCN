@@ -5,8 +5,8 @@
 
 | 生态 | tag | 发布到 | 凭据 |
 |------|-----|--------|------|
-| Python | `py-v3.0.0` | PyPI `geotool-cn` | `PYPI_API_TOKEN` |
-| Node | `npm-v3.0.0` | npm `@geotoolcn/core` | `NPM_TOKEN` |
+| Python | `py-v3.0.0` | PyPI `geotool-cn` | 无 —— Trusted Publishing（OIDC） |
+| Node | `npm-v3.0.0` | npm `@geotoolcn/core` | 无 —— Trusted Publishing（OIDC） |
 | Go | `packages/go/v3.0.0` | 无（`go get` 直接解析 git tag） | 无 |
 | CLI | `cli-v3.0.0` | GitHub Release 二进制 + `ghcr.io/13cohen/geotoolcn` | `GITHUB_TOKEN`（自带） |
 
@@ -89,61 +89,27 @@ npm 包带 `--provenance`。
 ⚠️ **不要移动 `packages/go/v*` tag。** proxy.golang.org 与 sum.golang.org 一旦记录就不可变，
 移动 tag 会让用户永久拿到旧内容或报 checksum mismatch。发错了就发下一个号。
 
-## 本地凭据
+## 凭据：没有
 
-发布凭据放在仓库根的 `.env`（已 gitignore），由 Tenter 的 files-to-copy 机制从主 checkout
-分发到每个新建的 worktree。CI 用 GitHub secrets，这份副本用于本地手动发布和 CI 失效时的应急。
+PyPI 与 npm 都通过 **Trusted Publishing（OIDC）** 发布：两个 registry 的项目设置里各登记了
+`13Cohen/GeoToolCN` 的 `release.yml` 作为发布者，发布 job 用 GitHub 签发的短期 OIDC token
+换取一次性上传凭据。仓库里没有 `PYPI_API_TOKEN` / `NPM_TOKEN` secret，也没有会过期的东西。
 
-之所以两处都留，是因为凭据一旦生成就再也读不回来：npm 只显示一次，GitHub secrets 是单向的。
-只存在 secrets 里，就等于没人再握有它 —— 想在本地发一次包，只能重新签发。
-
-```bash
-set -a && . .env && set +a
-rm -rf dist && python -m build && twine upload dist/*     # PyPI，twine 直接读 TWINE_*；先清 dist/，否则旧产物一起上传
-cd packages/node && node scripts/sync-data.mjs \
-  && npm publish --access public \
-       --//registry.npmjs.org/:_authToken="$NPM_TOKEN"    # npm 本身不读 NODE_AUTH_TOKEN，那是 setup-node 写 .npmrc 用的
-```
-
-本地发布绕过了门禁与产物验证，只在 CI 不可用时使用；发之前至少跑一遍
-`python scripts/verify_published.py --only <生态> --version <版本> --artifact <产物>`。
-
-| 渠道 | 变量 | 说明 |
-|------|------|------|
-| PyPI | `TWINE_USERNAME` / `TWINE_PASSWORD` | `__token__` + `pypi-…` |
-| npm | `NPM_TOKEN` | scope 限定 `@geotoolcn`，已勾 bypass 2FA |
+| 渠道 | 凭据 | 在哪里登记 |
+|------|------|-----------|
+| PyPI | OIDC | https://pypi.org/manage/project/geotool-cn/settings/publishing/ — GitHub `13Cohen/GeoToolCN`，workflow `release.yml`，environment 留空 |
+| npm | OIDC | https://www.npmjs.com/package/@geotoolcn/core/access — Trusted Publisher，GitHub Actions，同上 |
 | Go | — | 没有中心 registry，打 tag 即发布 |
-| GHCR / Release | — | CI 用内置 `GITHUB_TOKEN`；本地用 `gh auth token` 临时取，不留长期副本 |
+| GHCR / Release | 内置 `GITHUB_TOKEN` | — |
 
-⚠️ **新建 worktree 后先 `chmod 600 .env`**。主 checkout 里是 600，但拷贝过程不保留权限位，
-落到 worktree 里是 644 —— 同机其他用户可读。这不是一次性问题，每个新 worktree 都会重现。
+两处登记都绑定 **workflow 文件名**：把 `release.yml` 改名就得同步改登记，否则发布 job 会
+以 "invalid publisher" 失败。npm 的 OIDC 需要 npm ≥ 11.5.1，`release.yml` 先 `npm install -g npm@latest`。
 
-## ⚠️ NPM_TOKEN 有两个死线
+### 本地发布
 
-npm 的 Granular Access Token **只要带写权限，最长就是 90 天**（默认更短，只有 7 天）。
-当前这个 token 于 **2026-12-09 过期**，过期后 `npm-v*` tag 会以 401 失败，
-而其他三条发布路径不受影响 —— 也就是说故障会以「只有 npm 发不出去」的形式出现。
-
-更硬的那条死线：**2027 年 1 月起，npm 将移除 granular token「直接发布新版本」的能力**
-（签发页面上的原话）。届时续期也没用 —— token 还在有效期内，但发不了包。
-剩下的选项只有 Trusted Publishing，或者改用 `--access stage-only` 再走一道人工提升。
-
-所以迁移到 Trusted Publishing 不是「更好的做法」，是**有明确期限的必做项**。
-
-续期：
-
-1. https://www.npmjs.com/settings/<用户名>/tokens → Generate New Token → Granular Access Token
-2. 名称 `geotoolcn-ci-release`；勾选 bypass 2FA；权限 Read and write；scope 选 `@geotoolcn`
-3. `gh secret set NPM_TOKEN --repo 13Cohen/GeoToolCN`（从 stdin 读，别贴进 shell 历史）
-4. 同步更新主 checkout 的 `.env`，然后在旧 token 页面把它删掉 —— 一个没人握有明文、
-   却仍能发布的 token，留着只有风险没有用处
-
-**更好的解法是彻底不要这个 token**：npm 已支持 Trusted Publishing（OIDC），
-在 npm 包设置里绑定本仓库与 `release.yml` 后即可删除 `NPM_TOKEN`，也就没有过期这回事了。
-之所以现在没这么做，是因为它要求包**已经存在**才能配置发布者 —— 首次发布必须靠 token。
-第一次 `npm-v*` 成功之后就应该切过去。
-
-PyPI 同理（`release.yml` 里已写明为什么现在显式传 token 而非用 OIDC）。
+不再有本地发布路径：没有 token，`twine upload` / `npm publish` 在本机无法认证。
+CI 不可用时的选择是修好 CI，或在 PyPI / npm 网页临时签发一个 token、发完立刻删除。
+以前分发在 `.env` 里的 token 已在两个 registry 上撤销。
 
 ## 发布后验证
 
@@ -176,12 +142,8 @@ python scripts/verify_published.py --only python --version 3.0.0rc1
 每日运行失败时会**开一个带 `post-release-failure` 标签的 issue**（持续失败则在同一 issue 下追加评论，
 恢复后自动关闭）——Actions 页面里一条红色记录不会有人看见，issue 会。README 上有对应徽章。
 
-同一次每日运行还做两件与包无关的事（`watchdog` job）：
-
-- 调用 API 重新启用自己：GitHub 会在仓库 **60 天没有提交**后自动禁用定时 workflow，
-  而那正是这个守护存在的意义所在的安静期
-- `npm whoami` 确认 `NPM_TOKEN` 仍能认证，并在到期前 14 天开始报错——token 续期后把
-  workflow 里的日期改掉；切到 Trusted Publishing 后删掉这两步
+同一次每日运行还调用 API 重新启用自己（`watchdog` job）：GitHub 会在仓库 **60 天没有提交**后
+自动禁用定时 workflow，而那正是这个守护存在的意义所在的安静期。
 
 ⚠️ 新增语言时，它的 conformance adapter 必须能指向**已安装的包**，而不是写死源码路径。
 Node 适配器读 `GEOTOOLCN_MODULE` 环境变量；`conformance/adapters/python.py` 之所以存在，

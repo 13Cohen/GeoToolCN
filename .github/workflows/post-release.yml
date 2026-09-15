@@ -22,9 +22,6 @@ on:
       wait:
         type: number
         default: 300
-    secrets:
-      NPM_TOKEN:
-        required: false
 
   workflow_dispatch:
     inputs:
@@ -141,16 +138,9 @@ jobs:
             gh issue create --title "Published packages fail verification" --label "$label" --body "$body"
           fi
 
-  # Two things the daily run must also watch, because they break before any
-  # package does.
-  #
   # GitHub disables a scheduled workflow after 60 days without a commit — in
   # exactly the quiet period this run exists for. Re-enabling it from inside
   # the run resets that clock.
-  #
-  # NPM_TOKEN has an expiry (npm caps write tokens at 90 days) and after that
-  # only the npm publish job fails, with a 401, on the day someone tags a
-  # release. `npm whoami` finds out today instead.
   watchdog:
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
@@ -162,33 +152,3 @@ jobs:
     steps:
       - name: Keep the schedule alive
         run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/post-release.yml/enable"
-
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "22"
-          registry-url: https://registry.npmjs.org
-
-      - name: The npm token still authenticates
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          if [ -z "$NODE_AUTH_TOKEN" ]; then
-            echo "::error::NPM_TOKEN secret is not set — npm-v* releases will fail"
-            exit 1
-          fi
-          npm whoami
-
-      # The expiry is known in advance (docs/RELEASING.md). Two weeks of red
-      # runs beforehand beats one red release afterwards. Move the date when
-      # the token is renewed, or delete this step once trusted publishing
-      # replaces the token.
-      - name: The npm token is not about to expire
-        run: |
-          expires="2026-12-09"
-          warn_from=$(date -u -d "$expires - 14 days" +%s)
-          now=$(date -u +%s)
-          if [ "$now" -ge "$warn_from" ]; then
-            echo "::error::NPM_TOKEN expires on $expires — renew it or switch to trusted publishing (docs/RELEASING.md)"
-            exit 1
-          fi
-          echo "NPM_TOKEN valid until $expires"
