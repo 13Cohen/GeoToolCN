@@ -13,12 +13,13 @@
   },
   "license": {
     "code": "MIT (this repository)",
-    "data": "DataV.GeoAtlas terms — not verified by this project; see NOTICE"
+    "data": "DataV.GeoAtlas: 数据来源于高德开放平台，仅供学习交流使用 (learning and exchange only; see NOTICE)"
   },
   "counts": {
     "provinces": 34,
     "cities": 363,
     "districts": 2874
   },
-  "notes": "Taiwan (710000) has province-level boundary only, no sub-level data."
+  "notes": "Taiwan (710000) has province-level boundary only, no sub-level data.",
+  "source_notice": "数据来源于高德开放平台，仅供学习交流使用，若有版权相关问题，请前往高德开放平台确认"
 }
