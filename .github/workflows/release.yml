@@ -269,8 +269,16 @@ jobs:
     # Three of the four publish jobs are skipped on any given tag, and a skipped
     # dependency would otherwise skip this too.
     if: ${{ !cancelled() && !failure() && needs.plan.outputs.ecosystem != '' }}
+    # A called workflow may use no more than the caller grants, and GitHub
+    # validates that against every job in it before anything runs — including
+    # post-release.yml's schedule-only alert and watchdog jobs, which ask for
+    # issues: write and actions: write and read NPM_TOKEN. Granting less here
+    # is a startup_failure on every tag, with no log to say so.
     permissions:
       contents: read
+      issues: write
+      actions: write
+    secrets: inherit
     uses: ./.github/workflows/post-release.yml
     with:
       ecosystems: ${{ needs.plan.outputs.ecosystem }}
