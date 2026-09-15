@@ -362,6 +362,11 @@ for i in 0..n-1:
 | 1 | `lite` | + 1e-4 几何 + 0.1° 网格 | **3.58 MB** |
 | 2 | `full` | + 1e-5 几何 + 0.05° 网格 | **5.95 MB** |
 
+**发布状态。** 目前只有 `full` 档随各语言的包发布。`mini` 与 `lite` 是格式契约的一部分，
+每次 PR 在 CI 中构建并通过 L0 校验（`scripts/validate_gtc.py`），但**未发布、也未针对它们
+运行一致性套件**（`run.py` 的 Python 适配器固定读内置数据）。在有人真正需要之前把它们
+当作实验性档位：格式保证读得出来，行为保证只覆盖 `full`。
+
 `mini` 档支持除 `reverse` / `reverse_batch` / `is_in_china` / `is_in_region` 外的全部 API。
 调用需要几何的 API 时应抛出明确错误，而不是返回空结果：Python 抛 `GeometryUnavailable`，
 Node 抛 `GeometryUnavailable`，Go 以 `ErrNoGeometry` 为值 panic（这些方法的签名不带 error，

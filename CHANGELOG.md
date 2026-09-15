@@ -22,6 +22,23 @@
 - 一致性套件 38,348 → 39,438 条；`known-divergences.yaml` 首段更正为「黄金集由 Python 实现生成，
   独立性靠差分对拍保证」。
 
+### 数据管线与数据声明
+
+- **抓取脚本不再静默容忍部分失败。** 任一区划下载失败（重试后仍 5xx/429/超时）→ 不写任何文件、
+  退出码 1；`--allow-partial` 可强制。404 与服务故障分开处理。文件先写临时目录再一次性
+  `os.replace`，中断不留混合版本。退出码反映校验结果。
+- `validate_data.py` 的 landmark 检查以前通过 `GeoTool` 加载**旧的** `.gtc`，对刚抓的 GeoJSON
+  毫无检验；改为对新省级多边形做点在多边形判定。新增顶点包围盒检查、市级树同步、
+  `childrenNum>0` 却无区县的检查；省直辖县的前缀警告（30 条恒定噪声）改为准确的判定。
+- `DATA_UPDATE_REPORT.md` 按 adcode 区分新增 / 撤销 / 改名（以前改名显示为删+增）。
+- `DATA_VERSION.json` 新增 `content_sha256`（数据身份，抓取日期只供人看）、`conversion`
+  （转换残差预算）、`license` 字段。
+- 新增 `NOTICE`：MIT 只覆盖代码，边界数据来自 DataV.GeoAtlas，本项目未取得授权也未核实
+  再分发条款。README 加许可免责与已知覆盖缺口（台湾仅省级、永兴岛不在西沙区多边形内、
+  九段线已移除、转换残差、2801 对重叠区县）。
+- SPEC §4.1 明确 `mini` / `lite` 档目前为实验性：CI 构建并 L0 校验，未发布、未跑一致性套件。
+- 删除遗留的 `scripts/generate_admin_data.py`（会用腾讯 Excel 覆盖 `china_admin.json`）。
+
 ### 测试防线
 
 - **差分对拍进 CI**（每次 PR，20 万均匀点 + 每区县 3 个边界点）。它是唯一独立于「黄金集

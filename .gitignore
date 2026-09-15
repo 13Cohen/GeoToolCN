@@ -12,6 +12,8 @@ build/
 .DS_Store
 scripts/*.xlsx
 packages/node/data/
+# NOTICE is synced from the repository root by packages/node/scripts/sync-data.mjs
+packages/node/NOTICE
 packages/node/node_modules/
 # packages/go/data is committed, not ignored: `go get` fetches source straight
 # from git, and go:embed cannot reach outside the module directory. The Go

@@ -81,7 +81,6 @@ pip install -e .
 - `GeoToolCN/data/china_admin.json` — Lightweight admin division data for tree builder
 - `GeoToolCN/data/DATA_VERSION.json` — Data version metadata (source, date, counts)
 - `scripts/fetch_datav_geojson.py` — Fetch & convert data from DataV API, generates diff report
-- `scripts/generate_admin_data.py` — Legacy script (腾讯 Excel → china_admin.json, no longer used)
 - `tests/test_geotool.py` — pytest test suite for geocoding (module-scoped fixture)
 - `tests/test_admin_tree.py` — pytest test suite for admin tree
 - `tests/test_invariants.py` — structural invariants (INV-01..12); asserts properties that
@@ -204,10 +203,16 @@ All data (GeoJSON boundaries + admin tree) comes from a **single source**: DataV
 - **Coverage**: 34 provinces, 363 cities, 2874 districts (Taiwan province-level only)
 
 ### Updating Data
-1. Run `python scripts/fetch_datav_geojson.py` (takes ~5 min, needs internet)
-2. Review generated `DATA_UPDATE_REPORT.md` for changes
-3. Run `pytest` to verify nothing broke
-4. Commit the updated data files
+1. `python scripts/fetch_datav_geojson.py` (~5 min, needs internet). Refuses to write if
+   any region failed to download; `--allow-partial` overrides. Validates the new GeoJSON
+   itself (landmarks by point-in-polygon, bbox, tree sync) before returning 0
+2. Review `DATA_UPDATE_REPORT.md` — added / removed / renamed codes
+3. `python pipeline/build_gtc.py && python scripts/validate_gtc.py --round-trip`
+4. `python conformance/generate.py` and review the diff (answers may legitimately change)
+5. `bash packages/go/scripts/sync-data.sh` — the Go copy is committed and CI `cmp`s it
+6. `pytest` and `python conformance/differential.py`
+7. Commit data, `.gtc`, suite and the Go copy together; `DATA_VERSION.json`'s
+   `content_sha256` is the dataset's identity
 
 ## Ports
 Every implementation reads the same `.gtc` and is held to the same conformance suite.

@@ -11,7 +11,7 @@
       "default": "./src/index.js"
     }
   },
-  "files": ["src", "data", "index.d.ts", "README.md"],
+  "files": ["src", "data", "index.d.ts", "README.md", "NOTICE"],
   "engines": { "node": ">=18" },
   "scripts": {
     "prepare": "node scripts/sync-data.mjs",

@@ -229,10 +229,13 @@ python scripts/fetch_datav_geojson.py    # 下载 GeoJSON，GCJ-02 → WGS-84，
 python pipeline/build_gtc.py             # 从 GeoJSON 构建 china.full.gtc（需要 geopandas）
 python scripts/validate_gtc.py --round-trip
 python conformance/generate.py           # 重新生成一致性套件，审阅 diff 后提交
+bash packages/go/scripts/sync-data.sh    # Go 模块的数据副本要提交；CI 会比对两份是否一致
 ```
 
 `fetch_datav_geojson.py` 会递归下载省/市/区县边界、转换坐标系、更新 `DATA_VERSION.json`，
-并生成 `DATA_UPDATE_REPORT.md` 记录与上次的差异。运行时只需要 `.gtc` 文件，
+并生成 `DATA_UPDATE_REPORT.md` 记录与上次的差异（按 adcode 区分新增 / 撤销 / 改名）。
+任一区划下载失败则**不写任何文件**并以非零退出（`--allow-partial` 可强制）；
+文件先写到临时目录再一次性替换，中断不会留下混合版本。运行时只需要 `.gtc` 文件，
 GeoJSON 是构建输入，不随包分发。
 
 使用自定义数据：
@@ -249,7 +252,23 @@ geo = GeoTool(data_dir="/path/to/china.full.gtc")
 | 覆盖范围 | 34 省 / 363 市 / 2874 区县 |
 | 坐标系 | WGS-84（原始 GCJ-02 已转换） |
 | 编码体系 | 6 位 adcode |
-| 最近更新 | 2026 年 3 月 |
+| 最近更新 | 2026 年 3 月（`DATA_VERSION.json` 的 `content_sha256` 是数据的身份，抓取日期只供人看） |
+
+**许可与免责。** MIT 只覆盖本仓库的代码；随包分发的边界数据来自 DataV.GeoAtlas，
+本项目**未取得数据方授权、也未核实其再分发条款**，详见 [NOTICE](NOTICE)。
+再分发、商用或把它当作行政区划的权威表述之前，请自行查阅数据方条款与适用的测绘法规。
+边界是地理编码的便利工具，不是法律意义上的区划陈述。
+
+**已知的覆盖缺口**（均为数据源限制，不是本项目的缺陷）：
+
+- **台湾**只有省级边界，`reverse()` 只返回省，区县为空。
+- **三沙市**（460300）的西沙区（460301）多边形不含永兴岛——市政府驻地本身
+  `reverse(16.834, 112.338)` 返回全空，`is_in_china()` 为 `False`。南海随机点命中率约 0.3%。
+- **九段线**已从数据中移除（见 `DATA_UPDATE_REPORT.md`），南海海域不判为境内。
+- **坐标转换残差**：GCJ-02 → WGS-84 是一次减法近似，每个顶点带约 0.6 m（中位）至 5 m（边缘）的
+  系统性偏差，叠加在数据源自身精度之上。距边界 1 m 以内的归属是噪声，不要据此做决策。
+- 区县多边形两两**重叠** 2801 对（主要在新疆兵团与所在县、青海/西藏交界）；重叠带上一个点
+  只归一个区县，规则见 SPEC §3.4。
 
 ## 移植到新语言
 
