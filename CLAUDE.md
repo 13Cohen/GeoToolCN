@@ -163,11 +163,14 @@ independent point-in-polygon tests.  The source layers genuinely disagree: 加�
 administered by 黑龙江 but sits inside 内蒙古's province polygon, some district polygons
 extend past their province onto offshore islands, and city polygons overlap across
 prefecture borders.  Independent per-level lookups produce self-contradictory results.
-- `_parent_city` (built in `_build_parent_index`) maps district adcode → city adcode.
-  Do **not** use `adcode[:4] + "00"` — it is wrong for the 30 province-directly-governed
-  county-level divisions (blocks 4190/4290/4690/6590), yielding codes like `419000`.
-- Independent per-level lookup survives only as the fallback for points where no district
-  matches (offshore gaps).
+- Each district's parent city adcode is resolved at build time by
+  `_hierarchy.parent_city_code` and written into the `.gtc` META `parent` field;
+  `GTCData.parents[index]` is what `core._chain_from_district` reads. Do **not** use
+  `adcode[:4] + "00"` — it is wrong for the 30 province-directly-governed county-level
+  divisions (blocks 4190/4290/4690/6590), yielding codes like `419000`.
+- The province grid survives only as the fallback for points where no district matches
+  (Taiwan, offshore gaps). `is_in_region` follows the same path (SPEC §2.9) so it can never
+  disagree with `reverse()`.
 
 ### Key Classes
 - **`GeoTool`**: Main API class — `reverse()`, `reverse_batch()`, `search()`, `list_regions()`, `get_region()`
@@ -179,8 +182,10 @@ prefecture borders.  Independent per-level lookups produce self-contradictory re
   the rest average 2 candidate polygons. That is why no geometry library is needed
 - Polygons are decoded lazily and cached — parsing all ~1M vertices up front would cost seconds
 - Integer tables are fixed-width so `array.frombytes` over the mmap is a memcpy
-- Dict-based `name_index` and `code_index` for O(1) lookups
-- `make_valid()` on load to fix invalid geometries from data source
+- `GTCData.by_code` / `by_name` dicts give O(1) lookups; `level_ranges` makes each level a
+  contiguous index range because META is sorted by (level, adcode)
+- Invalid source geometries are repaired with `make_valid()` in `pipeline/build_gtc.py`,
+  at build time — the runtime never sees them
 
 ## Code Conventions
 - **Naming**: PascalCase classes, snake_case functions, UPPER_CASE constants, `_` prefix for private

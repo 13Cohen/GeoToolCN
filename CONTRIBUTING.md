@@ -75,12 +75,13 @@ python conformance/differential.py -n 200000
 ## 我想更新数据
 
 ```bash
-python scripts/fetch_datav_geojson.py       # 下载，GCJ-02 → WGS-84，生成 DATA_UPDATE_REPORT.md
+python scripts/fetch_datav_geojson.py       # 下载，GCJ-02 → WGS-84，生成 DATA_UPDATE_REPORT.md；任一区划失败则不写文件
 python pipeline/build_gtc.py                # 构建 GeoToolCN/data/china.full.gtc
 python scripts/validate_gtc.py --round-trip # 校验产物
-bash packages/go/scripts/sync-data.sh       # Go 的副本必须提交
+bash packages/go/scripts/sync-data.sh       # Go 的副本必须提交，CI 会逐字节比对
 python conformance/generate.py              # 重新生成套件
 pytest                                      # 不变量测试不依赖黄金值，数据更新后仍应全过
+python conformance/differential.py          # 对拍 geopandas 参考实现；CI 也会跑
 ```
 
 审阅 `DATA_UPDATE_REPORT.md` 里的增删区划。`tests/test_invariants.py` 的失败意味着新数据

@@ -1,4 +1,4 @@
-<!-- translation-of: docs/CLI.md sha256:9d39657c93ba84608891effd1a0acf2993fd2adc88b40df2780f331f7707eed8 -->
+<!-- translation-of: docs/CLI.md sha256:b919c93d3c9d4affd1d051f58be0f0e0f9e683fbe0471cc8dc7a3535d740aab0 -->
 
 # The geotoolcn CLI and HTTP server
 
@@ -228,6 +228,7 @@ take care when building URLs by hand).
 - The image runs as `nobody` (uid 65534) on `scratch`, with no shell; to debug,
   run a subcommand directly with `docker run ... reverse ...`
 - `/healthz` is intended as the readiness probe
+- No CORS headers are set: a browser calling it cross-origin will be blocked; add them at a reverse proxy if you need that
 
 ## Relationship to the libraries
 

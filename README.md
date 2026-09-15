@@ -114,7 +114,13 @@ fmt.Println(r.Province.Name, r.District.Name)   // 北京市 东城区
 ### `GeoTool(data_dir=None)`
 
 创建地理编码实例。默认读取内置的 `china.full.gtc`；传入一个目录（内含 `china.full.gtc`）
-或直接传 `.gtc` 文件路径可使用自定义数据，见[更新数据](#更新数据)。
+或直接传 `.gtc` 文件路径可使用自定义数据，见[更新数据](#更新数据)。`verify_checksums=True`
+加载时校验每个节的 CRC-32。
+
+实例可用作上下文管理器或调用 `close()` 释放内存映射；可以 `pickle`（按路径重新打开），
+因此能直接交给 `multiprocessing` 的 spawn 进程池；线程间共享一个实例是安全的。
+数据文件损坏时抛 `GTCFormatError`，在没有几何的 `mini` 档上调用 `reverse()` 等抛
+`GeometryUnavailable`——两者都从 `GeoToolCN` 顶层导出。
 
 ### `geo.reverse(lat, lng) → ReverseResult`
 
@@ -179,7 +185,7 @@ geo.search("朝阳区", city="长春市")        # 仅返回长春的
 ```python
 from dataclasses import dataclass
 
-@dataclass
+@dataclass(frozen=True)          # 不可变，可作 dict key / set 成员
 class Region:
     name: str        # "北京市"
     code: str        # "110000" (6位 adcode)
@@ -187,7 +193,7 @@ class Region:
     latitude: float  # 代表点纬度
     longitude: float # 代表点经度
 
-@dataclass
+@dataclass(frozen=True)
 class ReverseResult:
     province: Region | None
     city: Region | None

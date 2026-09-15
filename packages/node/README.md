@@ -12,7 +12,7 @@ The Node.js implementation of [GeoToolCN](https://github.com/13Cohen/GeoToolCN).
 npm install @geotoolcn/core
 ```
 
-Node.js ≥ 18. ESM. TypeScript declarations included.
+Node.js ≥ 18. ESM only — `import` works everywhere; `require()` of this package needs Node ≥ 20.19 or ≥ 22.12, where `require(esm)` is supported. TypeScript declarations included.
 
 ## Usage
 
@@ -164,7 +164,7 @@ const geo = new GeoTool();
 
 ## 环境要求
 
-Node.js ≥ 18。ESM 包。
+Node.js ≥ 18。纯 ESM 包：`import` 在任何版本可用；`require()` 需要 Node ≥ 20.19 或 ≥ 22.12（支持 `require(esm)` 的版本）。
 
 ## 数据来源
 

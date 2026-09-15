@@ -102,7 +102,7 @@
 | INV-05 | `lookup_adcode(x).district.code == x` | 2874 |
 | INV-06 | `list_regions(lvl)` 的 code 全部唯一，且每个都能被 `get_region` 查到 | 3271 |
 | INV-07 | `search(精确名)` 的结果必包含该名的区划 | 3271 |
-| INV-08 | 坐标转换往返误差 < 1 m；境外坐标原样返回 | 10000 随机点 |
+| INV-08 | 坐标转换往返误差在公布容差内（GCJ-02 一次减法近似 < 6 m，BD-09 < 0.5 m）；境外坐标原样返回 | 10000 随机点 |
 | INV-09 | 行政树叶子数 == `list_regions("district")` 计数；每个节点 code 可查 | 1 |
 | INV-10 | `reverse` 三级齐全时，该路径必存在于行政树中 | 全部命中点 |
 | INV-11 | `is_in_china(p) == (reverse(p).province is not None)` | 10000 随机点 |
@@ -182,17 +182,27 @@ strategy:
 
 ## 4. 已知差异登记表
 
-以下 7 条为 RFC-001 §11/§12 **实测确认**，是登记表的初始内容：
+登记表的内容以 `conformance/known-divergences.yaml` 为准；下表是其编号索引
+（写作本 RFC 时的草案编号与最终登记不同，此处已按登记表更正）：
 
-| ID | 差异 | 类型 | 实测量级 |
-|----|------|------|---------|
-| **DIV-001** | 离岛的 `province` 从 `None` 变为有值（嵊泗、玉环、潼南、博乐等） | `bugfix` | 8748 点中 ~4 例 |
-| **DIV-002** | `city` 与 `district` 不再自相矛盾（乌拉特前旗归巴彦淖尔而非包头等） | `bugfix` | 5 例，均为数据源两层互相矛盾 |
-| **DIV-003** | `search(name, province=…)` 不再因几何过滤丢掉离岛（`search("嵊泗县", province="浙江省")` 现返回 0 条） | `bugfix` | 至少 1 例 |
-| **DIV-004** | `district` 为 `None` 时 `city` 也置 `None` | `acceptable-loss` | 8622 点中 2 例（**0.023%**） |
-| **DIV-005** | `search(fuzzy=True)` 从正则匹配改为纯子串 | `behavior-change` | `search("东.区")` 18 条 → 1 条 |
-| **DIV-006** | `list_regions("district")` 改为 adcode 升序 | `behavior-change` | 仅 330113/330114 一对 |
-| **DIV-007** | `data_dir` 语义从 GeoJSON 目录改为 `.gtc` 路径 | `api-change` | — |
+| ID | 差异 | 类型 | 区间 |
+|----|------|------|------|
+| **DIV-001** | 离岛的 `province` 从 `None` 变为有值（嵊泗、玉环、潼南、博乐等） | `bugfix` | 2.0.x → 2.1.0 |
+| **DIV-002** | `city` 与 `district` 不再自相矛盾 | `bugfix` | 2.0.x → 2.1.0 |
+| **DIV-003** | 加格达奇区的省份归属修正（黑龙江，不是内蒙古） | `bugfix` | 2.0.x → 2.1.0 |
+| **DIV-004** | `lookup_adcode` 能解析省直辖县级行政区 | `bugfix` | 2.0.x → 2.1.0 |
+| **DIV-005** | `lookup_adcode` 能解析不设区的地级市 | `bugfix` | 2.0.x → 2.1.0 |
+| **DIV-006** | `search(name, province=…)` 不再因几何过滤丢掉离岛 | `bugfix` | 2.0.x → 2.1.0 |
+| **DIV-007** | `search(fuzzy=True)` 从正则改为纯子串 | `behavior-change` | 2.0.x → 2.1.0 |
+| **DIV-008** | `list_regions` 与 `search` 结果按 adcode 升序 | `behavior-change` | 2.0.x → 2.1.0 |
+| **DIV-101** | `district` 为 `None` 时 `city` 也置 `None` | `acceptable-loss` | 2.1.0 → 3.0.0 |
+| **DIV-102** | `data_dir` 不再接受 GeoJSON 目录 | `api-change` | 2.1.0 → 3.0.0 |
+| **DIV-103** | 无区县时的 `city` 不再跨省矛盾 | `bugfix` | 2.1.0 → 3.0.0 |
+| **DIV-104** | 边界一个量化步长内的归属翻转 | `acceptable-loss` | 2.1.0 → 3.0.0 |
+| **DIV-105** | `is_in_china` 与 `reverse` 不再矛盾 | `bugfix` | 2.1.0 → 3.0.0 |
+| **DIV-106** | `is_in_region` 与 `reverse` 永远一致 | `behavior-change` | 3.0.0 → 3.1.0 |
+| **DIV-107** | `lookup_adcode` 对不存在的编码返回空 | `behavior-change` | 3.0.0 → 3.1.0 |
+| **DIV-108** | `search` 接受直辖市作为 city、空查询返回空 | `behavior-change` | 3.0.0 → 3.1.0 |
 
 登记项格式：
 
