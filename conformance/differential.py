@@ -90,8 +90,15 @@ def boundary_samples(gdf, per_district: int, rng: random.Random):
 
 class Classifier:
     def __init__(self, reference, candidate, registry: dict[str, dict]) -> None:
-        gdf = reference._levels["district"].gdf
-        self._boundaries = {str(c): boundary_of(g) for c, g in zip(gdf["adcode"], gdf.geometry)}
+        # Boundaries at both levels: a point in a gap between districts is
+        # attributed by the province polygons, and quantisation flips those
+        # at their borders exactly as it flips districts (河北/山东, 0.13 m).
+        self._boundaries = {}
+        for level in ("district", "province"):
+            gdf = reference._levels[level].gdf
+            self._boundaries.update(
+                {str(c): boundary_of(g) for c, g in zip(gdf["adcode"], gdf.geometry)}
+            )
         step = 10 ** -candidate._data.precision
         bound = registry["DIV-104"]["bound"]
         self._div104_max_degrees = step * float(bound["quantisation_steps"])
@@ -130,13 +137,19 @@ class Classifier:
                 return "DIV-101"
 
         # DIV-104: quantisation to 1e-5 flips attribution near a boundary —
-        # and only there. Measured, not assumed.
+        # and only there. Measured, not assumed. Districts when they differ;
+        # otherwise the provinces, for a point in a district gap that the two
+        # province polygons hand to different sides.
         if ref_district != cand_district:
-            distance = self.distance_to_disputed_boundary(lat, lng, (ref_district, cand_district))
-            self.div104_max_seen_degrees = max(self.div104_max_seen_degrees, distance)
-            if distance < self._div104_max_degrees:
-                return "DIV-104"
-
+            disputed = (ref_district, cand_district)
+        elif ref_province != cand_province:
+            disputed = (ref_province, cand_province)
+        else:
+            return None
+        distance = self.distance_to_disputed_boundary(lat, lng, disputed)
+        self.div104_max_seen_degrees = max(self.div104_max_seen_degrees, distance)
+        if distance < self._div104_max_degrees:
+            return "DIV-104"
         return None
 
 
@@ -199,8 +212,9 @@ def main() -> int:
         print(f"\n前 {MAX_SHOWN} 条未登记差异：")
         for lat, lng, ref, cand in unexplained[:MAX_SHOWN]:
             extra = ""
-            if ref[2] != cand[2]:
-                d = classifier.distance_to_disputed_boundary(lat, lng, (ref[2], cand[2]))
+            disputed = (ref[2], cand[2]) if ref[2] != cand[2] else (ref[0], cand[0])
+            if disputed[0] != disputed[1]:
+                d = classifier.distance_to_disputed_boundary(lat, lng, disputed)
                 extra = f"  距争议边界 {d * _METRES_PER_DEGREE:.2f} m"
             print(f"  ({lat:.6f}, {lng:.6f}){extra}\n    参考 {ref}\n    GTC  {cand}")
         print(

@@ -253,6 +253,9 @@ divergences:
       - {lat: 31.077564, lng: 117.899444, old: "340281", new: "340706", metres: 0.019}
       - {lat: 36.370829, lng: 120.859146, old: "370215", new: null, metres: 0.113}
       - {lat: 29.779500, lng: 112.933955, old: "421023", new: "430623", metres: 0.460}
+      # Province level, in a gap between districts: the province polygons
+      # decide, and they flip at their shared border just the same.
+      - {lat: 37.337253, lng: 115.971382, old: ["130000", "131100", null], new: ["370000", null, null], metres: 0.126}
 
   - id: DIV-105
     title: is_in_china 与 reverse 不再互相矛盾
