@@ -154,7 +154,7 @@ $ geotoolcn convert wgs84 gcj02 116.4074 39.9042
 
 ### `version` / `help`
 
-`version` 输出 `{"version": "3.0.0"}`；`help` 输出用法。`--version`、`-v`、`--help`、`-h` 是别名。
+`version` 输出 `{"version": "3.1.0"}`；`help` 输出用法。`--version`、`-v`、`--help`、`-h` 是别名。
 版本号在发布时由 tag 注入；`go install ...@v3.x.y` 装出来的二进制从 Go 记录的模块版本读取；
 从未打 tag 的源码树直接 `go build` 则报 `dev`。这四个子命令都不加载数据集。
 
