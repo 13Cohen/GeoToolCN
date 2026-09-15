@@ -323,7 +323,12 @@ class TestLookupInvariants:
 
 class TestCoordInvariants:
     def test_inv08_conversions_round_trip(self) -> None:
-        """INV-08: every conversion pair round-trips within 1 m."""
+        """INV-08: every conversion pair round-trips within its published tolerance.
+
+        6 m for the pairs that go through the lossy single-step GCJ-02 inverse
+        (measured max 4.75 m), 0.5 m for the near-exact BD-09 pair. See
+        COORD_ROUNDTRIP_TOLERANCE_M.
+        """
         violations = []
         pairs = [
             ("wgs84<->gcj02", wgs84_to_gcj02, gcj02_to_wgs84),

@@ -1,4 +1,4 @@
-<!-- translation-of: SPEC.md sha256:7a29091c20d0ddbb78ee7dafd14578df57f7a65698e49f43d1077ecc90173276 -->
+<!-- translation-of: SPEC.md sha256:1c4e9e8a1c28e02b363ea4ff0f00efe1075fd188a812f87c7d167be4c492efbb -->
 
 # GeoToolCN Specification v1
 
@@ -456,7 +456,7 @@ file must not reach the decoder and fail there as an out-of-bounds access.
 | Offset | Size | Field | Notes |
 |--------|------|-------|-------|
 | 0 | 4 | `magic` | ASCII `"GTCN"` |
-| 4 | 2 | `format_version` | u16, `1` for this spec. An implementation must refuse a major version it does not know |
+| 4 | 2 | `format_version` | u16, `1` for this spec. A single integer with no major/minor split: an implementation refuses any value other than the one it supports |
 | 6 | 1 | `dataset` | u8, see §4.1 |
 | 7 | 1 | `precision` | u8, quantisation exponent |
 | 8 | 4 | `data_version` | u32, e.g. `20260307` |

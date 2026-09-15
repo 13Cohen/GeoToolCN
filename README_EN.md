@@ -116,7 +116,14 @@ methods in Go); the semantics are fixed by [SPEC.md](SPEC.md). Python shown belo
 
 Create an instance. Reads the bundled `china.full.gtc` by default. Pass a directory
 containing `china.full.gtc`, or the path to a `.gtc` file, to use your own build — see
-[Updating Data](#updating-data).
+[Updating Data](#updating-data). `verify_checksums=True` checks every section's CRC-32
+on load.
+
+The instance is a context manager and has `close()` to release the memory map; it pickles
+(by path, reopened on the other side), so it can be handed straight to a `multiprocessing`
+spawn pool; sharing one instance across threads is safe. A damaged data file raises
+`GTCFormatError`; calling `reverse()` and friends on the geometry-free `mini` tier raises
+`GeometryUnavailable` — both exported from `GeoToolCN`.
 
 ### `geo.reverse(lat, lng) → ReverseResult`
 
@@ -192,7 +199,7 @@ SARs use the province code for their city node. Cached after the first call.
 ```python
 from dataclasses import dataclass
 
-@dataclass
+@dataclass(frozen=True)          # immutable: usable as a dict key / set member
 class Region:
     name: str        # "北京市"
     code: str        # "110000" (6-digit adcode)
@@ -200,7 +207,7 @@ class Region:
     latitude: float  # representative point
     longitude: float
 
-@dataclass
+@dataclass(frozen=True)
 class ReverseResult:
     province: Region | None
     city: Region | None

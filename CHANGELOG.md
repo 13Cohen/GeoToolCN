@@ -22,6 +22,16 @@
 - 一致性套件 38,348 → 39,438 条；`known-divergences.yaml` 首段更正为「黄金集由 Python 实现生成，
   独立性靠差分对拍保证」。
 
+### 其它
+
+- 模块级懒单例加锁：16 线程同时首调以前会创建 5 个实例。
+- `GeoTool` 可 pickle（按路径重开），`multiprocessing` 的 spawn 进程池可直接
+  `pool.starmap(geo.reverse, coords)`。
+- 文档更正：CLAUDE.md 的 v2 残留（`_build_parent_index` / `name_index` / `make_valid()` 在运行时）、
+  RFC-002 §4 的 DIV 编号与登记表错位、INV-08 的"< 1 m"实为 6 m、SPEC §4.1 `format_version`
+  是单一整数、CHANGELOG 里从未发布的 2.1.0、Node README 的 `require(esm)` 版本要求、
+  CLI 文档补 CORS 说明、CONTRIBUTING 数据更新步骤补差分对拍。
+
 ### 数据管线与数据声明
 
 - **抓取脚本不再静默容忍部分失败。** 任一区划下载失败（重试后仍 5xx/429/超时）→ 不写任何文件、
@@ -233,7 +243,10 @@ Python 的公开 API 没有增删。升级指南见 [MIGRATION_v3.md](MIGRATION_
 
 ---
 
-## [2.1.0] — 2026-09-09
+## [2.1.0] — 2026-09-09（未单独发布）
+
+没有 `v2.1.0` tag，PyPI 上也没有 2.1.0；这些修复随 3.0.0 一起发出，保留本节是因为
+`known-divergences.yaml` 的 DIV-001 ~ DIV-008 以它为基线。3.0.0 的性能对比也以它为参照。
 
 修复一批行政层级不自洽的问题。**这些修复会改变部分坐标的返回结果**，详见下方「结果变化」。
 

@@ -54,13 +54,24 @@ __all__ = [
 # Module-level convenience functions (lazy singleton)
 # ---------------------------------------------------------------------------
 
+import threading as _threading
+
 _instance: GeoTool | None = None
+_instance_lock = _threading.Lock()
 
 
 def _get_instance() -> GeoTool:
+    """The shared instance, created once.
+
+    Locked: sixteen threads calling ``reverse()`` for the first time at once
+    used to build five instances — all correct, each holding its own mapping
+    and 10 ms of parse — and keep the last one.
+    """
     global _instance
     if _instance is None:
-        _instance = GeoTool()
+        with _instance_lock:
+            if _instance is None:
+                _instance = GeoTool()
     return _instance
 
 

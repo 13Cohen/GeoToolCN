@@ -1,4 +1,4 @@
-<!-- translation-of: CONTRIBUTING.md sha256:facfbc5566688b735b56930e6274326320351ff79d0ce4f638a253c1447e9c28 -->
+<!-- translation-of: CONTRIBUTING.md sha256:39ddda9b0250de83e3c5cf41de8a747109e86f8d826e18459502e84d2c81b2ed -->
 
 # Contributing
 
@@ -25,7 +25,7 @@ behaviour fails the other two implementations' conformance run**, so CI runs
 all three. To run everything locally:
 
 ```bash
-pytest                                                                   # 123 tests
+pytest                                                                   # 166 tests
 python conformance/run.py                                                # Python, 38k cases
 python conformance/run.py --adapter cmd --cmd "node conformance/adapters/node.mjs"
 cd packages/go && CGO_ENABLED=0 go build -o /tmp/gtc-adapter ./cmd/conformance-adapter && cd ../..
@@ -92,12 +92,13 @@ The order matters, and each step has a CI gate:
 ## I want to update the data
 
 ```bash
-python scripts/fetch_datav_geojson.py       # download, GCJ-02 → WGS-84, writes DATA_UPDATE_REPORT.md
+python scripts/fetch_datav_geojson.py       # download, GCJ-02 → WGS-84, writes DATA_UPDATE_REPORT.md; writes nothing if any region failed
 python pipeline/build_gtc.py                # build GeoToolCN/data/china.full.gtc
 python scripts/validate_gtc.py --round-trip # validate the artifact
-bash packages/go/scripts/sync-data.sh       # Go's copy must be committed
+bash packages/go/scripts/sync-data.sh       # Go's copy must be committed; CI compares it byte for byte
 python conformance/generate.py              # regenerate the suite
 pytest                                      # invariants carry no golden values and must still pass
+python conformance/differential.py          # against the geopandas reference; CI runs this too
 ```
 
 Review the added and removed divisions in `DATA_UPDATE_REPORT.md`. A failure in

@@ -109,7 +109,21 @@ class GeoTool:
                     f".gtc binary rather than a directory of GeoJSON; build one "
                     f"with `python pipeline/build_gtc.py`."
                 )
+        self._path = path
+        self._verify_checksums = verify_checksums
         self._data = GTCData(path, verify_checksums=verify_checksums)
+
+    # Picklable by path: a memory map cannot cross a process boundary, but
+    # the file it maps can be reopened there. This is what lets a GeoTool be
+    # handed to multiprocessing under the "spawn" start method (macOS and
+    # Windows default) — `pool.starmap(geo.reverse, coords)` pickles `geo`.
+    def __getstate__(self) -> dict:
+        return {"path": self._path, "verify_checksums": self._verify_checksums}
+
+    def __setstate__(self, state: dict) -> None:
+        self._path = state["path"]
+        self._verify_checksums = state["verify_checksums"]
+        self._data = GTCData(self._path, verify_checksums=self._verify_checksums)
 
     def close(self) -> None:
         """Release the memory-mapped dataset.  Idempotent.

@@ -232,6 +232,50 @@ class TestDamagedFiles:
             geo.is_in_china(39.9, 116.4)
 
 
+class TestProcessAndThreadUse:
+    def test_pickle_round_trip(self) -> None:
+        import pickle
+
+        geo = GeoTool()
+        clone = pickle.loads(pickle.dumps(geo))
+        assert clone.reverse(39.9, 116.4).district.code == "110101"
+        assert clone is not geo
+
+    def test_spawned_process_can_use_a_pickled_instance(self) -> None:
+        import multiprocessing
+
+        ctx = multiprocessing.get_context("spawn")
+        geo = GeoTool()
+        coords = [(39.9, 116.4), (31.2, 121.5)]
+        with ctx.Pool(1) as pool:
+            results = pool.starmap(geo.reverse, coords)
+        assert results == [geo.reverse(lat, lng) for lat, lng in coords]
+
+    def test_shared_instance_is_created_once_under_contention(self) -> None:
+        import threading
+
+        import GeoToolCN as pkg
+
+        saved = pkg._instance
+        pkg._instance = None
+        try:
+            seen = []
+            barrier = threading.Barrier(16)
+
+            def worker():
+                barrier.wait()
+                seen.append(pkg._get_instance())
+
+            threads = [threading.Thread(target=worker) for _ in range(16)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+            assert len({id(g) for g in seen}) == 1
+        finally:
+            pkg._instance = saved
+
+
 class TestPublicExceptions:
     def test_exported_at_top_level(self) -> None:
         assert GeoToolCN.GTCFormatError is GTCFormatError
