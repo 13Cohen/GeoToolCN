@@ -239,12 +239,23 @@ divergences:
       DataV 边界的名义精度远粗于半米。
     affects: [reverse, reverse_batch, is_in_china, is_in_region]
     match:
-      condition: "distance_to_disputed_boundary < 1 quantisation step"
+      condition: "distance_to_disputed_boundary < bound"
+    # Read by conformance/differential.py: a district disagreement is DIV-104
+    # only if the point lies within this many quantisation steps of the
+    # boundary of either district involved. Everything measured so far sits
+    # under 0.45 steps (21,640 boundary samples, 2026-09-15); a full step
+    # leaves margin without admitting a mis-attributed overlap band, which is
+    # never closer than a cell.
+    bound:
+      quantisation_steps: 1
     samples:
       - {lat: 35.159165, lng: 114.280733, old: "410727", new: "410726", metres: 0.019}
       - {lat: 31.077564, lng: 117.899444, old: "340281", new: "340706", metres: 0.019}
       - {lat: 36.370829, lng: 120.859146, old: "370215", new: null, metres: 0.113}
       - {lat: 29.779500, lng: 112.933955, old: "421023", new: "430623", metres: 0.460}
+      # Province level, in a gap between districts: the province polygons
+      # decide, and they flip at their shared border just the same.
+      - {lat: 37.337253, lng: 115.971382, old: ["130000", "131100", null], new: ["370000", null, null], metres: 0.126}
 
   - id: DIV-105
     title: is_in_china 与 reverse 不再互相矛盾

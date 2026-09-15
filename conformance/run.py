@@ -73,6 +73,9 @@ def div_103(case: dict, got) -> bool:
         and want[1] is not None
         and want[0] is not None
         and want[1][:2] != want[0][:2]
+        # The excuse only covers the consistent answer, not any answer.
+        and got[0] == want[0]
+        and (got[1] is None or got[1][:2] == got[0][:2])
     )
 
 
@@ -367,6 +370,16 @@ def main() -> int:
 
     for divergence, count in report.divergences.most_common():
         print(f"已登记差异 {divergence}: {count:,} 条")
+    # An allowance that excused nothing is a registry entry that has gone
+    # stale — the divergence no longer diverges, or the cases that showed it
+    # were dropped. Either way the entry is now misinformation, and a matcher
+    # nobody exercises is one that can drift into excusing a real failure.
+    unused = [d for d in allowed if report.divergences[d] == 0]
+    if unused:
+        print(f"\n--allow 中从未匹配到任何用例的差异 id: {unused}\n"
+              "该登记已过期：要么差异已消失（从 known-divergences.yaml 里移除或标记 resolved），"
+              "要么套件丢了展示它的用例。")
+        return 1
 
     total = report.passed + len(report.failures)
     if not report.failures:
