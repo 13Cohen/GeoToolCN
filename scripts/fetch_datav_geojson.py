@@ -8,14 +8,33 @@ DataV uses GCJ-02 coordinates. This script:
 4. Generates china_admin.json from the same data source
 
 Usage:
-    python scripts/fetch_datav_geojson.py
+    python scripts/fetch_datav_geojson.py [--allow-partial] [--out DIR]
+
+A run that loses any region — a 404, a rate limit that outlasts the retries,
+a network drop half way — writes nothing and exits 1. The previous version
+kept going and wrote every file with a zero exit status, so a city that
+timed out simply lost its districts and the only trace was a "Removed"
+list in DATA_UPDATE_REPORT.md that somebody had to read. --allow-partial
+restores that behaviour for the case where the missing region really is
+gone from the source.
+
+Files are written to a temporary directory and moved into place together
+at the end, so an interrupted run cannot leave GeoJSON from one fetch next
+to an admin tree from another.
 """
 
 from __future__ import annotations
 
+import argparse
+import hashlib
 import json
 import math
+import os
+import shutil
+import sys
+import tempfile
 import time
+import urllib.error
 import urllib.request
 from datetime import date
 from pathlib import Path
@@ -83,17 +102,46 @@ def convert_feature(feature: dict) -> dict:
 
 # ── HTTP fetch ───────────────────────────────────────────────────────────────
 
+class FetchError(Exception):
+    """A region could not be fetched after the retries were exhausted."""
+
+
+FAILURES: list[str] = []
+
+
 def fetch_json(url: str) -> dict | None:
-    """Fetch JSON from URL with retry."""
-    for attempt in range(3):
+    """Fetch JSON, telling a missing resource apart from a failing service.
+
+    404 means the source has no such region and is returned as None at once —
+    retrying it is pointless and hides the difference from a real outage.
+    429 and 5xx back off and retry; anything still failing after that is
+    recorded in FAILURES, which decides whether the run may write at all.
+    """
+    delay = 2.0
+    last_error: Exception | None = None
+    for attempt in range(5):
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "GeoToolCN-DataFetcher/1.0"})
             with urllib.request.urlopen(req, timeout=30) as resp:
                 return json.loads(resp.read())
-        except Exception as e:
-            print(f"  Retry {attempt + 1}/3 for {url}: {e}")
-            time.sleep(2)
-    print(f"  FAILED: {url}")
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return None
+            last_error = e
+            if e.code == 429:
+                retry_after = e.headers.get("Retry-After")
+                delay = max(delay, float(retry_after)) if retry_after and retry_after.isdigit() else delay * 2
+            elif 500 <= e.code < 600:
+                delay *= 2
+            else:
+                break  # 401/403 and friends will not improve with retries
+        except Exception as e:  # noqa: BLE001 - timeouts, DNS, resets
+            last_error = e
+            delay *= 2
+        print(f"  Retry {attempt + 1}/5 for {url} in {delay:.0f}s: {last_error}")
+        time.sleep(delay)
+    print(f"  FAILED: {url}: {last_error}")
+    FAILURES.append(f"{url}: {last_error}")
     return None
 
 
@@ -127,12 +175,21 @@ def normalize_properties(props: dict, level: str) -> dict:
     }
 
 
-def main():
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--allow-partial", action="store_true",
+                        help="write the files even if some regions could not be fetched")
+    parser.add_argument("--out", type=Path, default=OUTPUT_DIR,
+                        help=f"where to write (default: {OUTPUT_DIR})")
+    args = parser.parse_args()
+    out_dir = args.out
+
     print("Fetching national data...")
     national = fetch_region(100000)
     if not national:
         print("Failed to fetch national data, aborting.")
-        return
+        return 1
 
     provinces = []
     cities = []
@@ -163,6 +220,10 @@ def main():
         # Fetch children (cities/districts)
         children_data = fetch_region(adcode)
         if not children_data:
+            # Taiwan is the one province the source publishes without
+            # children; anywhere else this is data loss.
+            if str(adcode) != "710000":
+                FAILURES.append(f"{name} ({adcode}): no children data")
             print(f"  No children data for {name}")
             continue
 
@@ -189,6 +250,9 @@ def main():
                 # Fetch district children
                 if children_num > 0:
                     district_data = fetch_region(child_adcode)
+                    if not district_data:
+                        FAILURES.append(f"{child_name} ({child_adcode}): declares "
+                                        f"{children_num} children, none fetched")
                     if district_data:
                         for dist_feat in district_data["features"]:
                             dist_props = dist_feat["properties"]
@@ -217,61 +281,100 @@ def main():
                 districts.append(converted_child)
                 admin_tree["districts"].append([str(child_adcode), child_name])
 
+    # ── Refuse to write a partial dataset ────────────────────────────────
+    if FAILURES:
+        print(f"\n{len(FAILURES)} region(s) could not be fetched:")
+        for f in FAILURES:
+            print(f"  - {f}")
+        if not args.allow_partial:
+            print("\nNothing written. Re-run, or pass --allow-partial if the source "
+                  "really no longer has these regions.")
+            return 1
+        print("\n--allow-partial: writing anyway.")
+
     # ── Load previous version for diff ─────────────────────────────────
-    version_path = OUTPUT_DIR / "DATA_VERSION.json"
+    version_path = out_dir / "DATA_VERSION.json"
     old_version = None
     if version_path.exists():
         old_version = json.loads(version_path.read_text(encoding="utf-8"))
 
     old_admin = None
-    admin_path = OUTPUT_DIR / "china_admin.json"
+    admin_path = out_dir / "china_admin.json"
     if admin_path.exists():
         old_admin = json.loads(admin_path.read_text(encoding="utf-8"))
 
-    # ── Write output files ───────────────────────────────────────────────
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    # ── Write output files, atomically as a set ──────────────────────────
+    out_dir.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix="datav-", dir=out_dir))
 
     def write_geojson(filename: str, features: list):
-        path = OUTPUT_DIR / filename
+        path = staging / filename
         geojson = {"type": "FeatureCollection", "features": features}
         path.write_text(json.dumps(geojson, ensure_ascii=False), encoding="utf-8")
-        print(f"\nWrote {path} ({len(features)} features)")
+        print(f"\nStaged {filename} ({len(features)} features)")
 
     write_geojson("china_province.geojson", provinces)
     write_geojson("china_city.geojson", cities)
     write_geojson("china_district.geojson", districts)
 
-    # Write admin tree
-    admin_path.write_text(json.dumps(admin_tree, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"Wrote {admin_path}")
+    admin_text = json.dumps(admin_tree, ensure_ascii=False, indent=2)
+    (staging / "china_admin.json").write_text(admin_text, encoding="utf-8")
+    print(f"Staged china_admin.json")
     print(f"  provinces: {len(admin_tree['provinces'])}")
     print(f"  cities: {len(admin_tree['cities'])}")
     print(f"  districts: {len(admin_tree['districts'])}")
 
-    # ── Write DATA_VERSION.json ──────────────────────────────────────────
+    # ── DATA_VERSION.json ────────────────────────────────────────────────
     new_counts = {
         "provinces": len(provinces),
         "cities": len(cities),
         "districts": len(districts),
     }
+    # The identity of a dataset is its content, not the day it was fetched:
+    # the same DataV snapshot fetched a day later must not look like a new
+    # version. The admin tree covers every code and name, so its hash is the
+    # version; fetched_at stays for humans.
+    content_hash = hashlib.sha256(admin_text.encode("utf-8")).hexdigest()
     new_version = {
         "source": "DataV.GeoAtlas (阿里云 DataV 地理小工具)",
         "source_url": "https://datav.aliyun.com/tools/atlas",
         "api_base": BASE_URL,
         "fetched_at": date.today().isoformat(),
+        "content_sha256": content_hash,
         "original_crs": "GCJ-02",
         "converted_crs": "WGS-84",
+        "conversion": {
+            "method": "single-step inverse of the GCJ-02 offset, per vertex",
+            "residual_m": "0.6 median, up to ~5 at the edges of the covered area",
+            "note": "Every vertex carries this systematic residual on top of the "
+                    "source's own accuracy; sub-metre boundary decisions are noise.",
+        },
+        "license": {
+            "code": "MIT (this repository)",
+            "data": "DataV.GeoAtlas terms — not verified by this project; see NOTICE",
+        },
         "counts": new_counts,
         "notes": "Taiwan (710000) has province-level boundary only, no sub-level data.",
     }
-    version_path.write_text(
+    (staging / "DATA_VERSION.json").write_text(
         json.dumps(new_version, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    print(f"\nWrote {version_path}")
 
-    # ── Generate diff report ─────────────────────────────────────────────
+    # ── Diff report ──────────────────────────────────────────────────────
     report = _build_diff_report(old_version, old_admin, new_version, admin_tree)
-    report_path = OUTPUT_DIR.parent.parent / "DATA_UPDATE_REPORT.md"
+    # The report lives at the repository root next to the CHANGELOG; a custom
+    # --out keeps everything, report included, in that directory.
+    repo_root = Path(__file__).resolve().parent.parent
+    report_path = (repo_root if out_dir == OUTPUT_DIR else out_dir) / "DATA_UPDATE_REPORT.md"
+
+    # Everything staged; now move the set into place. os.replace is atomic
+    # per file, and the files are small enough that the window between them
+    # is milliseconds rather than the minutes the fetch took.
+    for name in ("china_province.geojson", "china_city.geojson", "china_district.geojson",
+                 "china_admin.json", "DATA_VERSION.json"):
+        os.replace(staging / name, out_dir / name)
+        print(f"Wrote {out_dir / name}")
+    shutil.rmtree(staging, ignore_errors=True)
     report_path.write_text(report, encoding="utf-8")
     print(f"Wrote {report_path}")
 
@@ -279,9 +382,10 @@ def main():
     print("\n" + "=" * 60)
     print("Running post-update validation...")
     print("=" * 60 + "\n")
-    from validate_data import validate as run_validation
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from validate_data import validate as run_validation  # noqa: PLC0415
 
-    errors = run_validation()
+    errors = run_validation(out_dir)
     warns = [e for e in errors if e.severity == "WARN"]
     errs = [e for e in errors if e.severity == "ERROR"]
 
@@ -295,11 +399,12 @@ def main():
         for e in errs:
             print(f"  {e}")
         print(f"\nData update completed but validation FAILED with {len(errs)} error(s).")
-        print("Review the errors above before publishing.")
-    else:
-        print(f"\nValidation PASSED ({len(warns)} warning(s)).")
-
-    print("\nDone!")
+        print("Review the errors above before committing.")
+        return 1
+    print(f"\nValidation PASSED ({len(warns)} warning(s)).")
+    print("\nNext: python pipeline/build_gtc.py && python scripts/validate_gtc.py --round-trip"
+          " && python conformance/generate.py && bash packages/go/scripts/sync-data.sh")
+    return 0
 
 
 def _build_diff_report(
@@ -349,23 +454,33 @@ def _build_diff_report(
 
     if old_admin is not None:
         lines += ["", "## Detail Changes", ""]
+        # Keyed by code, so a renamed division shows as a rename rather than
+        # as one removal plus one addition — a consumer keying stored results
+        # by adcode needs to know which codes vanished, not which names did.
         for key, label in [("provinces", "Provinces"), ("cities", "Cities"), ("districts", "Districts")]:
-            old_set = {tuple(x) for x in old_admin.get(key, [])}
-            new_set = {tuple(x) for x in new_admin[key]}
-            added = sorted(new_set - old_set)
-            removed = sorted(old_set - new_set)
-            if added or removed:
+            old_by_code = {code: name for code, name in old_admin.get(key, [])}
+            new_by_code = {code: name for code, name in new_admin[key]}
+            added = sorted(c for c in new_by_code if c not in old_by_code)
+            removed = sorted(c for c in old_by_code if c not in new_by_code)
+            renamed = sorted(c for c in new_by_code if c in old_by_code and old_by_code[c] != new_by_code[c])
+            if added or removed or renamed:
                 lines.append(f"### {label}")
                 lines.append("")
                 if added:
-                    lines.append(f"**Added ({len(added)})**:")
-                    for code, name in added:
-                        lines.append(f"- `{code}` {name}")
+                    lines.append(f"**Added ({len(added)})** — new codes; nothing stored refers to them yet:")
+                    for code in added:
+                        lines.append(f"- `{code}` {new_by_code[code]}")
                     lines.append("")
                 if removed:
-                    lines.append(f"**Removed ({len(removed)})**:")
-                    for code, name in removed:
-                        lines.append(f"- `{code}` {name}")
+                    lines.append(f"**Removed ({len(removed)})** — codes that no longer resolve; "
+                                 f"stored results keyed by these need remapping:")
+                    for code in removed:
+                        lines.append(f"- `{code}` {old_by_code[code]}")
+                    lines.append("")
+                if renamed:
+                    lines.append(f"**Renamed ({len(renamed)})** — same code, new name:")
+                    for code in renamed:
+                        lines.append(f"- `{code}` {old_by_code[code]} → {new_by_code[code]}")
                     lines.append("")
 
     if not old_admin and not old_ver:
@@ -376,4 +491,4 @@ def _build_diff_report(
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -1,0 +1,27 @@
+GeoToolCN
+Copyright (c) 2025 Cohen — MIT License (see LICENSE)
+
+The MIT license covers the code in this repository. The administrative
+boundary data it ships (GeoToolCN/data/china.full.gtc, packages/go/data/,
+and the npm tarball's data/) is derived from a third-party source and is
+NOT covered by that license:
+
+  Source:      DataV.GeoAtlas, 阿里云 DataV 地理小工具
+               https://datav.aliyun.com/tools/atlas
+  Fetched via: https://geo.datav.aliyun.com/areas_v3/bound (scripts/fetch_datav_geojson.py)
+  Processing:  converted from GCJ-02 to WGS-84 with the standard single-step
+               inverse (a ~0.6 m median, up to ~5 m systematic residual on
+               every vertex), quantised to 1e-5 degree, re-encoded.
+
+This project has not obtained a license from the data provider and has not
+verified the provider's terms of use for redistribution. Nothing here
+grants you any right to the data beyond what the provider's terms grant
+you directly. Before relying on the data — and in particular before
+redistributing it, using it commercially, or presenting it as an
+authoritative depiction of administrative boundaries — consult the
+provider's terms and, where applicable, the laws on surveying and mapping
+data that apply to you.
+
+The boundaries are a convenience for geocoding, not a legal or official
+statement of administrative divisions. Known limitations are listed in
+README.md under 数据来源 / Data Source.

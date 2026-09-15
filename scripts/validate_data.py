@@ -7,9 +7,12 @@ Checks:
 3. Adcode format (6 digits, no duplicates)
 4. Parent-child adcode prefix consistency
 5. Geometry validity (no empty/null geometries)
-6. Known landmark reverse-geocode spot checks
-7. Admin tree ↔ GeoJSON consistency
-8. Every non-Taiwan province has districts
+6. Known landmark spot checks — point-in-polygon against the *new* province
+   GeoJSON (this used to load the previously built .gtc, i.e. the old data)
+7. Admin tree ↔ GeoJSON consistency, at every level
+8. Every non-Taiwan province has districts; every city that declares
+   children has districts under its prefix
+9. Every vertex lies inside the China bounding box
 
 Usage:
     python scripts/validate_data.py
@@ -59,8 +62,15 @@ class ValidationError:
         return f"[{self.severity}] {self.category}: {self.message}"
 
 
-def validate() -> list[ValidationError]:
+# Every vertex of every polygon must fall in here; a file that was converted
+# twice, or not at all, still would, so this is a gross-error check only —
+# the landmark checks below are what catch a wrong CRS.
+CHINA_BBOX = (72.0, 0.5, 138.0, 56.0)  # lng_min, lat_min, lng_max, lat_max
+
+
+def validate(data_dir: Path = DATA_DIR) -> list[ValidationError]:
     errors: list[ValidationError] = []
+    DATA_DIR_ = data_dir
 
     # ── 1. File existence ─────────────────────────────────────────────
     required_files = [
@@ -71,7 +81,7 @@ def validate() -> list[ValidationError]:
         "DATA_VERSION.json",
     ]
     for fname in required_files:
-        if not (DATA_DIR / fname).exists():
+        if not (DATA_DIR_ / fname).exists():
             errors.append(ValidationError("FILE", f"Missing required file: {fname}"))
 
     if any(e.category == "FILE" for e in errors):
@@ -80,7 +90,7 @@ def validate() -> list[ValidationError]:
     # ── 2. Load GeoJSON files ─────────────────────────────────────────
     geojsons = {}
     for level in ("province", "city", "district"):
-        path = DATA_DIR / f"china_{level}.geojson"
+        path = DATA_DIR_ / f"china_{level}.geojson"
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             geojsons[level] = data["features"]
@@ -138,7 +148,8 @@ def validate() -> list[ValidationError]:
                 f"matching province for prefix {prefix2}",
             ))
 
-    city_prefixes = {str(f["properties"]["adcode"])[:4] for f in geojsons["city"]}
+    city_codes = {str(f["properties"]["adcode"]) for f in geojsons["city"]}
+    city_prefixes = {c[:4] for c in city_codes}
     for feat in geojsons["district"]:
         adcode = str(feat["properties"]["adcode"])
         prefix2 = adcode[:2]
@@ -151,14 +162,31 @@ def validate() -> list[ValidationError]:
                     f"District {feat['properties']['name']} ({adcode}) "
                     f"under municipality prefix {prefix2} has no province",
                 ))
-        else:
-            if prefix4 not in city_prefixes:
-                errors.append(ValidationError(
-                    "HIERARCHY",
-                    f"District {feat['properties']['name']} ({adcode}) has no "
-                    f"matching city for prefix {prefix4}",
-                    severity="WARN",
-                ))
+        elif prefix4 not in city_prefixes and adcode not in city_codes:
+            # The 30 province-governed county-level divisions (4190/4290/
+            # 4690/6590) have no prefix-4 city and are published in the city
+            # layer under their own code; anything else without a parent is
+            # a real gap, so this is an error rather than the warning that
+            # used to fire for all 30 of them and drown everything else.
+            errors.append(ValidationError(
+                "HIERARCHY",
+                f"District {feat['properties']['name']} ({adcode}) has no "
+                f"matching city for prefix {prefix4} and is not a city itself",
+            ))
+
+    # A city that says it has children must have districts under it; a
+    # fetch that timed out on one city loses exactly those and nothing else
+    # in the counts notices.
+    district_prefixes = {str(f["properties"]["adcode"])[:4] for f in geojsons["district"]}
+    for feat in geojsons["city"]:
+        props = feat["properties"]
+        adcode = str(props["adcode"])
+        if props.get("childrenNum", 0) > 0 and adcode[:4] not in district_prefixes:
+            errors.append(ValidationError(
+                "HIERARCHY",
+                f"City {props['name']} ({adcode}) declares {props['childrenNum']} "
+                f"children but the district layer has none under {adcode[:4]}",
+            ))
 
     # ── 6. Geometry checks ────────────────────────────────────────────
     for level, features in geojsons.items():
@@ -173,6 +201,30 @@ def validate() -> list[ValidationError]:
             elif not geom.get("coordinates"):
                 errors.append(ValidationError(
                     "GEOMETRY", f"Empty coordinates for {name} ({adcode}) at {level}"
+                ))
+
+    # ── 6b. Every vertex inside the China bounding box ───────────────
+    def vertices(coords):
+        if isinstance(coords[0], (int, float)):
+            yield coords
+        else:
+            for c in coords:
+                yield from vertices(c)
+
+    lng_min, lat_min, lng_max, lat_max = CHINA_BBOX
+    for level, features in geojsons.items():
+        for feat in features:
+            geom = feat.get("geometry") or {}
+            if not geom.get("coordinates"):
+                continue
+            bad = next((v for v in vertices(geom["coordinates"])
+                        if not (lng_min <= v[0] <= lng_max and lat_min <= v[1] <= lat_max)), None)
+            if bad is not None:
+                props = feat.get("properties", {})
+                errors.append(ValidationError(
+                    "GEOMETRY",
+                    f"{props.get('name')} ({props.get('adcode')}) at {level} has a vertex "
+                    f"outside China's bounding box: {bad[:2]} — wrong CRS or a swapped axis?",
                 ))
 
     # ── 7. Province coverage ──────────────────────────────────────────
@@ -192,7 +244,7 @@ def validate() -> list[ValidationError]:
             ))
 
     # ── 8. Admin tree consistency ─────────────────────────────────────
-    admin_path = DATA_DIR / "china_admin.json"
+    admin_path = DATA_DIR_ / "china_admin.json"
     admin = json.loads(admin_path.read_text(encoding="utf-8"))
 
     admin_prov_codes = {code for code, _ in admin["provinces"]}
@@ -208,6 +260,15 @@ def validate() -> list[ValidationError]:
         errors.append(ValidationError(
             "TREE_SYNC",
             f"Provinces in admin tree but not in GeoJSON: {sorted(missing_in_geojson)}",
+        ))
+
+    admin_city_codes = {code for code, _ in admin["cities"]}
+    if admin_city_codes != city_codes:
+        errors.append(ValidationError(
+            "TREE_SYNC",
+            f"City codes differ between admin tree and GeoJSON: "
+            f"only in tree {sorted(admin_city_codes - city_codes)[:10]}, "
+            f"only in GeoJSON {sorted(city_codes - admin_city_codes)[:10]}",
         ))
 
     admin_dist_codes = {code for code, _ in admin["districts"]}
@@ -229,35 +290,40 @@ def validate() -> list[ValidationError]:
             severity="WARN",
         ))
 
-    # ── 9. Landmark spot checks (requires geopandas) ─────────────────
+    # ── 9. Landmark spot checks, against the data being validated ─────
+    # Not through GeoTool: in version 3 that loads the previously built
+    # .gtc, so it would validate last month's data and pass on anything.
     try:
-        from GeoToolCN import GeoTool
-        geo = GeoTool(data_dir=str(DATA_DIR))
+        from shapely.geometry import Point, shape  # noqa: PLC0415
+        from shapely import make_valid  # noqa: PLC0415
+    except ImportError:
+        errors.append(ValidationError(
+            "LANDMARK", "Skipped landmark checks (shapely not installed)", severity="WARN",
+        ))
+    else:
+        provinces = [
+            (str(f["properties"]["adcode"]), f["properties"]["name"],
+             make_valid(shape(f["geometry"])))
+            for f in geojsons["province"] if f.get("geometry")
+        ]
         for lat, lng, expected_prefix, label in LANDMARKS:
-            result = geo.reverse(lat, lng)
-            if result.province is None:
+            point = Point(lng, lat)
+            hits = [(code, name) for code, name, geom in provinces if geom.contains(point)]
+            if not hits:
                 errors.append(ValidationError(
                     "LANDMARK",
-                    f"{label} ({lat}, {lng}) reverse returned no province",
+                    f"{label} ({lat}, {lng}) falls in no province polygon — "
+                    f"coordinates not WGS-84, or converted twice?",
                 ))
-            elif not result.province.code.startswith(expected_prefix):
+            elif not any(code.startswith(expected_prefix) for code, _ in hits):
                 errors.append(ValidationError(
                     "LANDMARK",
                     f"{label} ({lat}, {lng}) expected province prefix "
-                    f"{expected_prefix!r}, got {result.province.code!r} "
-                    f"({result.province.name})",
+                    f"{expected_prefix!r}, got {hits}",
                 ))
-    except ImportError:
-        errors.append(ValidationError(
-            "LANDMARK",
-            "Skipped landmark checks (geopandas not installed)",
-            severity="WARN",
-        ))
-    except Exception as e:
-        errors.append(ValidationError("LANDMARK", f"Landmark check failed: {e}"))
 
     # ── 10. DATA_VERSION.json sanity ──────────────────────────────────
-    version_path = DATA_DIR / "DATA_VERSION.json"
+    version_path = DATA_DIR_ / "DATA_VERSION.json"
     version = json.loads(version_path.read_text(encoding="utf-8"))
     for key in ("source", "fetched_at", "counts"):
         if key not in version:

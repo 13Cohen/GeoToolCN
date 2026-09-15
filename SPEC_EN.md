@@ -1,4 +1,4 @@
-<!-- translation-of: SPEC.md sha256:c4be2a2afd40bc39aa8d0bbe54ca3a949e99dde8b22f0cf82e18f84801e64042 -->
+<!-- translation-of: SPEC.md sha256:7a29091c20d0ddbb78ee7dafd14578df57f7a65698e49f43d1077ecc90173276 -->
 
 # GeoToolCN Specification v1
 
@@ -428,6 +428,14 @@ fixed-width so that implementations can read them without decoding.
 | 0 | `mini` | META + NAMES, no geometry | **0.13 MB** |
 | 1 | `lite` | + 1e-4 geometry + 0.1° grid | **3.58 MB** |
 | 2 | `full` | + 1e-5 geometry + 0.05° grid | **5.95 MB** |
+
+**Release status.** Only the `full` tier ships in any package. `mini` and
+`lite` are part of the format contract and are built and L0-validated
+(`scripts/validate_gtc.py`) in CI on every PR, but they are **not published
+and the conformance suite is not run against them** (`run.py`'s Python adapter
+reads the bundled data). Until someone actually needs them, treat them as
+experimental tiers: the format guarantees they load, the behavioural
+guarantees cover `full` only.
 
 The `mini` tier supports every API except `reverse`, `reverse_batch`,
 `is_in_china` and `is_in_region`. Calling a geometry-dependent API must raise a

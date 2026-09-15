@@ -24,3 +24,8 @@ for (const name of files) {
   copyFileSync(from, join(target, name));
   console.log(`synced ${name}`);
 }
+
+// The data's provenance and the terms caveat travel with the data: the
+// tarball ships 6 MB of boundaries that MIT does not cover.
+copyFileSync(join(here, "..", "..", "..", "NOTICE"), join(here, "..", "NOTICE"));
+console.log("synced NOTICE");

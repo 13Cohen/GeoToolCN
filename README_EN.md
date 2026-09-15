@@ -248,12 +248,16 @@ python scripts/fetch_datav_geojson.py    # download GeoJSON, GCJ-02 → WGS-84, 
 python pipeline/build_gtc.py             # build china.full.gtc from it (needs geopandas)
 python scripts/validate_gtc.py --round-trip
 python conformance/generate.py           # regenerate the suite; review the diff, commit
+bash packages/go/scripts/sync-data.sh    # the Go module's copy is committed; CI compares the two
 ```
 
 `fetch_datav_geojson.py` downloads province / city / district boundaries recursively,
 converts the coordinate system, updates `DATA_VERSION.json` and writes
-`DATA_UPDATE_REPORT.md` with the differences from the previous data. Only the `.gtc` is
-needed at runtime; the GeoJSON is build input and is not shipped.
+`DATA_UPDATE_REPORT.md` with the differences from the previous data (added / removed /
+renamed, keyed by adcode). If any region fails to download it **writes nothing** and exits
+non-zero (`--allow-partial` overrides); files are staged in a temporary directory and moved
+into place together, so an interrupted run cannot leave a mixed-vintage set. Only the
+`.gtc` is needed at runtime; the GeoJSON is build input and is not shipped.
 
 To use your own build:
 
@@ -269,7 +273,30 @@ geo = GeoTool(data_dir="/path/to/china.full.gtc")
 | Coverage | 34 provinces / 363 cities / 2874 districts |
 | CRS | WGS-84 (converted from GCJ-02) |
 | Codes | 6-digit adcode |
-| Last updated | March 2026 |
+| Last updated | March 2026 (`content_sha256` in `DATA_VERSION.json` is the dataset's identity; the fetch date is for humans) |
+
+**License and disclaimer.** MIT covers the code in this repository only. The boundary
+data shipped with every package comes from DataV.GeoAtlas; this project has **neither a
+license from the provider nor verified its redistribution terms** — see [NOTICE](NOTICE).
+Before redistributing the data, using it commercially, or presenting it as an authoritative
+statement of administrative divisions, consult the provider's terms and the surveying and
+mapping laws that apply to you. The boundaries are a geocoding convenience, not a legal
+statement of divisions.
+
+**Known coverage gaps** (limitations of the source, not defects of this project):
+
+- **Taiwan** has a province-level boundary only: `reverse()` returns the province, no district.
+- **三沙市** (460300): the 西沙区 (460301) polygons do not include 永兴岛, the seat of the city
+  itself — `reverse(16.834, 112.338)` is empty and `is_in_china()` is `False`. About 0.3% of
+  random points in the South China Sea resolve.
+- The **nine-dash line** has been removed from the data (see `DATA_UPDATE_REPORT.md`); the
+  South China Sea is not inside China for this library.
+- **Conversion residual**: GCJ-02 → WGS-84 is a single-step inverse; every vertex carries a
+  systematic ~0.6 m (median) to ~5 m (edges) offset on top of the source's own accuracy. An
+  attribution within 1 m of a boundary is noise — do not base decisions on it.
+- District polygons **overlap** in 2,801 pairs (mostly the 兵团 cities inside 新疆 counties
+  and along the 青海/西藏 border); a point in an overlap band belongs to one district, by
+  the rule in SPEC §3.4.
 
 ## Porting to another language
 

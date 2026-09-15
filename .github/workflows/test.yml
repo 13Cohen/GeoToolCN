@@ -390,6 +390,8 @@ jobs:
         run: |
           cmp GeoToolCN/data/china.full.gtc packages/go/data/china.full.gtc
           cmp GeoToolCN/data/china_admin.json packages/go/data/china_admin.json
+          cmp GeoToolCN/data/DATA_VERSION.json packages/go/data/DATA_VERSION.json
+          cmp NOTICE packages/go/data/NOTICE
 
       - name: Vet and test
         working-directory: packages/go

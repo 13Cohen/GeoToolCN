@@ -11,6 +11,9 @@ version = "3.0.0"
 description = "Offline geocoding and reverse geocoding for Chinese administrative regions"
 readme = "README.md"
 license = "MIT"
+# NOTICE explains that the license covers the code, not the bundled boundary
+# data, and where that data comes from. It ships in the wheel next to LICENSE.
+license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.9"
 authors = [
     { name = "Cohen" },
