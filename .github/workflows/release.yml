@@ -105,6 +105,7 @@ jobs:
         env:
           VERSION: ${{ needs.plan.outputs.version }}
         run: |
+          mkdir -p /tmp/npm-dist   # npm pack does not create the destination
           cd packages/node && npm pack --pack-destination /tmp/npm-dist
           cd "$GITHUB_WORKSPACE"
           python scripts/verify_published.py --only node --version "$VERSION" \
