@@ -1,6 +1,6 @@
 {
   "name": "@geotoolcn/core",
-  "version": "3.1.0-rc.1",
+  "version": "3.1.0",
   "description": "Offline geocoding and reverse geocoding for Chinese administrative regions",
   "type": "module",
   "main": "./src/index.js",

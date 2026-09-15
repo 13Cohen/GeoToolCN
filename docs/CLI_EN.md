@@ -1,4 +1,4 @@
-<!-- translation-of: docs/CLI.md sha256:b919c93d3c9d4affd1d051f58be0f0e0f9e683fbe0471cc8dc7a3535d740aab0 -->
+<!-- translation-of: docs/CLI.md sha256:24686b50144f3135ba278fa24e0eea4e73fcfc22876b2edd33e98a63b2ff076d -->
 
 # The geotoolcn CLI and HTTP server
 
@@ -169,7 +169,7 @@ stays clean.
 
 ### `version` / `help`
 
-`version` prints `{"version": "3.0.0"}`; `help` prints usage. `--version`,
+`version` prints `{"version": "3.1.0"}`; `help` prints usage. `--version`,
 `-v`, `--help` and `-h` are aliases. The version is injected from the tag at
 release time; a binary from `go install ...@v3.x.y` reads the module version Go
 recorded; a plain `go build` from an untagged tree reports `dev`. None of these
