@@ -2,7 +2,7 @@
 
 本文件记录 GeoToolCN 的重要变更。版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [3.1.0rc1] — 2026-09-15
 
 ### 行为变更（3.1.0，DIV-106 ~ DIV-108，见 [MIGRATION_v3.md](MIGRATION_v3.md)「3.1.0 的行为变更」）
 

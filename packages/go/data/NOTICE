@@ -13,14 +13,26 @@ NOT covered by that license:
                inverse (a ~0.6 m median, up to ~5 m systematic residual on
                every vertex), quantised to 1e-5 degree, re-encoded.
 
-This project has not obtained a license from the data provider and has not
-verified the provider's terms of use for redistribution. Nothing here
-grants you any right to the data beyond what the provider's terms grant
-you directly. Before relying on the data — and in particular before
-redistributing it, using it commercially, or presenting it as an
-authoritative depiction of administrative boundaries — consult the
-provider's terms and, where applicable, the laws on surveying and mapping
-data that apply to you.
+The provider's own notice on the GeoAtlas tool reads (verbatim, as
+reproduced in Alibaba Cloud's DataV documentation and by third parties;
+the tool page itself is a JavaScript shell):
+
+    数据来源于高德开放平台，仅供学习交流使用，
+    若有版权相关问题，请前往高德开放平台确认。
+
+    "The data comes from the Amap (高德) Open Platform and is provided for
+    learning and exchange only. For copyright questions, confirm with the
+    Amap Open Platform."
+
+That is: the boundaries originate with Amap, DataV republishes them for
+learning and exchange, and neither Alibaba Cloud nor Amap has granted this
+project any license to redistribute them. Nothing here grants you any
+right to the data beyond what those providers' terms grant you directly.
+Before relying on the data — and in particular before using it
+commercially, redistributing it, or presenting it as an authoritative
+depiction of administrative boundaries — obtain whatever permission the
+Amap Open Platform terms require, and observe the laws on surveying and
+mapping data that apply to you.
 
 The boundaries are a convenience for geocoding, not a legal or official
 statement of administrative divisions. Known limitations are listed in

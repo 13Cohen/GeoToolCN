@@ -283,12 +283,15 @@ geo = GeoTool(data_dir="/path/to/china.full.gtc")
 | Last updated | March 2026 (`content_sha256` in `DATA_VERSION.json` is the dataset's identity; the fetch date is for humans) |
 
 **License and disclaimer.** MIT covers the code in this repository only. The boundary
-data shipped with every package comes from DataV.GeoAtlas; this project has **neither a
-license from the provider nor verified its redistribution terms** — see [NOTICE](NOTICE).
-Before redistributing the data, using it commercially, or presenting it as an authoritative
-statement of administrative divisions, consult the provider's terms and the surveying and
-mapping laws that apply to you. The boundaries are a geocoding convenience, not a legal
-statement of divisions.
+data shipped with every package comes from DataV.GeoAtlas, whose own notice reads
+"**数据来源于高德开放平台，仅供学习交流使用，若有版权相关问题，请前往高德开放平台确认**" —
+the data originates with the Amap (高德) Open Platform and is republished for learning
+and exchange only. This project holds no redistribution license from Alibaba Cloud or
+Amap — see [NOTICE](NOTICE). **Before using the data commercially, redistributing it, or
+presenting it as an authoritative statement of administrative divisions, obtain the
+permission the Amap Open Platform terms require**, and observe the surveying and mapping
+laws that apply to you. The boundaries are a geocoding convenience, not a legal statement
+of divisions.
 
 **Known coverage gaps** (limitations of the source, not defects of this project):
 
