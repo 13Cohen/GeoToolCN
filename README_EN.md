@@ -6,12 +6,28 @@
 [![Test](https://github.com/13Cohen/GeoToolCN/actions/workflows/test.yml/badge.svg)](https://github.com/13Cohen/GeoToolCN/actions/workflows/test.yml)
 [![Published packages](https://github.com/13Cohen/GeoToolCN/actions/workflows/post-release.yml/badge.svg?event=schedule)](https://github.com/13Cohen/GeoToolCN/actions/workflows/post-release.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![GitHub Stars](https://img.shields.io/github/stars/13Cohen/GeoToolCN)](https://github.com/13Cohen/GeoToolCN)
 
 Offline geocoding for Chinese administrative divisions — every province, city and
 district, with no API key and no network. Implementations in Python, Node.js and Go,
 plus a CLI / HTTP server for everything else.
 
 [中文](README.md)
+
+## Table of Contents
+
+- [Features](#features)
+- [Use Cases](#use-cases)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [API Reference](#api-reference)
+- [Performance](#performance)
+- [Testing and consistency](#testing-and-consistency)
+- [Updating Data](#updating-data)
+- [Data Source](#data-source)
+- [Porting to another language](#porting-to-another-language)
+- [Contributing](#contributing)
+- [License](#license)
 
 ## Features
 
@@ -21,6 +37,16 @@ plus a CLI / HTTP server for everything else.
 - **Coordinate systems** — WGS-84 / GCJ-02 / BD-09 conversions and great-circle distance
 - **Zero dependencies** — each implementation uses only its language's standard library; 6 MB of bundled data, cold start in tens of milliseconds
 - **Consistent across languages** — all three read the same data file and pass the same 38,000+ conformance cases
+
+## Use Cases
+
+- Batch province / city / district resolution for logistics and e-commerce address books
+- A data source for province / city / district cascader widgets in frontend apps
+- Intranet or government/enterprise environments with no outbound network access, or
+  compliance requirements around data leaving the country
+- Batch geotagging with no API key, no rate limit and no usage-based billing
+- CI, edge devices and Serverless — anywhere cold start matters (see the cold-start
+  numbers under Performance below)
 
 ## Installation
 
@@ -110,7 +136,7 @@ Data is embedded with `go:embed`; cross-compiles with `CGO_ENABLED=0`. See [pack
 ## API Reference
 
 The three implementations expose the same API one-to-one (camelCase in Node, exported
-methods in Go); the semantics are fixed by [SPEC.md](SPEC.md). Python shown below.
+methods in Go); the semantics are fixed by [SPEC_EN.md](SPEC_EN.md). Python shown below.
 
 ### `GeoTool(data_dir=None)`
 
