@@ -6,11 +6,27 @@
 [![Test](https://github.com/13Cohen/GeoToolCN/actions/workflows/test.yml/badge.svg)](https://github.com/13Cohen/GeoToolCN/actions/workflows/test.yml)
 [![Published packages](https://github.com/13Cohen/GeoToolCN/actions/workflows/post-release.yml/badge.svg?event=schedule)](https://github.com/13Cohen/GeoToolCN/actions/workflows/post-release.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![GitHub Stars](https://img.shields.io/github/stars/13Cohen/GeoToolCN)](https://github.com/13Cohen/GeoToolCN)
 
 中国行政区划离线地理编码工具，覆盖全部省、市、区县，无需 API 密钥或网络。
 Python、Node.js、Go 三种实现，外加一个覆盖其余语言的 CLI / HTTP 服务。
 
 [English](README_EN.md)
+
+## 目录
+
+- [功能特点](#功能特点)
+- [适用场景](#适用场景)
+- [安装](#安装)
+- [快速上手](#快速上手)
+- [API 参考](#api-参考)
+- [性能](#性能)
+- [测试与一致性](#测试与一致性)
+- [更新数据](#更新数据)
+- [数据来源](#数据来源)
+- [移植到新语言](#移植到新语言)
+- [参与贡献](#参与贡献)
+- [许可证](#许可证)
 
 ## 功能特点
 
@@ -20,6 +36,14 @@ Python、Node.js、Go 三种实现，外加一个覆盖其余语言的 CLI / HTT
 - **坐标系转换** — WGS-84 / GCJ-02 / BD-09 互转，以及球面距离
 - **零依赖** — 每种实现都只用各自语言的标准库，6 MB 内置数据，冷启动几十毫秒
 - **跨语言一致** — 三种实现读同一份数据文件，通过同一套 38,000+ 条一致性用例
+
+## 适用场景
+
+- 物流、电商等场景下地址库的批量省市区解析
+- 前端省市区级联选择器的数据源
+- 无法访问外网、或对数据出境有合规要求的内网 / 政企环境
+- 无需 API Key、无限流限制、无按量计费的批量地理标注
+- CI、边缘设备、Serverless 等对冷启动敏感的场景（对应下文"性能"一节的冷启动数据）
 
 ## 安装
 
