@@ -236,7 +236,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       # Tags: the full tag name as before, plus semver tags so an image can be
       # pinned to a minor or major, plus the commit. `latest` only moves for a
@@ -255,7 +255,7 @@ jobs:
             type=semver,pattern={{major}},value=v${{ needs.plan.outputs.version }},enable=${{ needs.plan.outputs.prerelease != 'true' }}
             type=sha
 
-      - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           push: true
