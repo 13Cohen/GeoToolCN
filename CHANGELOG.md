@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+## [3.1.1] — 2026-11-02
+
+- 更新发布与测试流程的 Actions 固定 SHA：setup-python / setup-node 7.1.0、
+  gh-action-pypi-publish 1.14.3（修复 GHSA-5xjx-3w67-w9x9）、docker/login-action 4.7.0。
+- GHCR 镜像发布与验证使用当前仓库所有者命名空间 `ghcr.io/justinchen13/geotoolcn`。
 - **PyPI 与 npm 改为 Trusted Publishing（OIDC）。** 两个 registry 的项目设置里登记了本仓库的
   `release.yml` 为发布者；`PYPI_API_TOKEN` / `NPM_TOKEN` secret 已删除，旧 token 已在两个 registry
   上撤销，看门狗里的 token 探活随之移除。3.1.0 是最后一个用 token 发布的版本。
