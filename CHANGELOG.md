@@ -8,6 +8,7 @@
 
 - 更新发布与测试流程的 Actions 固定 SHA：setup-python / setup-node 7.1.0、
   gh-action-pypi-publish 1.14.3（修复 GHSA-5xjx-3w67-w9x9）、docker/login-action 4.7.0。
+- Python 3.9 的 CI 使用 Ubuntu 24.04，避免 Ubuntu 26.04 缺少对应解释器构建导致安装失败。
 - GHCR 镜像发布与验证使用当前仓库所有者命名空间 `ghcr.io/justinchen13/geotoolcn`。
 - **PyPI 与 npm 改为 Trusted Publishing（OIDC）。** 两个 registry 的项目设置里登记了本仓库的
   `release.yml` 为发布者；`PYPI_API_TOKEN` / `NPM_TOKEN` secret 已删除，旧 token 已在两个 registry

@@ -28,7 +28,14 @@ jobs:
         # pyproject.toml says "OS Independent"; until now nothing ran anywhere
         # but Linux. One row each for the mmap reader and the CRLF-sensitive
         # checks on the two platforms users actually install on.
+        # Python 3.9 has no build for Ubuntu 26.04 (ubuntu-latest). Keep
+        # testing the supported floor on the previous Ubuntu LTS.
+        exclude:
+          - os: ubuntu-latest
+            python-version: "3.9"
         include:
+          - os: ubuntu-24.04
+            python-version: "3.9"
           - os: windows-latest
             python-version: "3.12"
           - os: macos-latest
