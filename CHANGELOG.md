@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+## [npm 3.1.2] — 2026-11-02
+
+- 修正 npm 包的 `repository.url` 为当前仓库 `justinchen13/GeoToolCN`，满足 Trusted Publishing 的仓库身份匹配要求。
+
 ## [3.1.1] — 2026-11-02
 
 - 更新发布与测试流程的 Actions 固定 SHA：setup-python / setup-node 7.1.0、
